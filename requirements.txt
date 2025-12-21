@@ -33,6 +33,9 @@ cryptography==41.0.7
 # HTTP Client (Testing)
 requests==2.31.0
 
+# HTTP Client (Async - AI Council)
+httpx==0.28.1
+
 # ============================================================================
 # Development Dependencies (Optional)
 # ============================================================================

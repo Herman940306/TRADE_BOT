@@ -46,6 +46,7 @@ from app.schemas.signal import SignalIn, SignalOut
 from app.auth.security import verify_hmac_signature, HMACVerificationError
 from app.database.session import get_db
 from app.logic.risk_manager import calculate_position_size, RiskProfile
+from app.logic.ai_council import AICouncil, DebateResult, ModelVerdict
 
 
 # ============================================================================
@@ -422,7 +423,94 @@ async def receive_tradingview_signal(
         print(f"[DB-501] Risk assessment insert failed: {e}")
     
     # ========================================================================
-    # STEP 9: Calculate processing time
+    # STEP 9: COLD PATH AI - AI Council Debate
+    # ========================================================================
+    # Only proceed with AI debate if risk assessment was approved
+    ai_consensus = "SKIPPED"
+    ai_rejection_reason: Optional[str] = None
+    debate_result: Optional[DebateResult] = None
+    
+    if risk_status == "APPROVED" and risk_profile is not None:
+        try:
+            # Initialize AI Council with zero-cost models
+            council = AICouncil()
+            
+            # Conduct Bull/Bear debate (synchronous - must complete before response)
+            debate_result = await council.conduct_debate(
+                correlation_id=correlation_id,
+                symbol=signal_in.symbol,
+                side=signal_in.side.value if hasattr(signal_in.side, 'value') else str(signal_in.side),
+                price=signal_in.price,
+                quantity=risk_profile.calculated_quantity
+            )
+            
+            # Determine AI consensus status
+            if debate_result.final_verdict:
+                ai_consensus = "APPROVED"
+            else:
+                ai_consensus = "REJECTED"
+                ai_rejection_reason = (
+                    f"Consensus score {debate_result.consensus_score}/100 "
+                    f"(requires unanimous approval)"
+                )
+            
+            print(
+                f"[AI-COUNCIL] correlation_id={correlation_id} | "
+                f"consensus={debate_result.consensus_score} | "
+                f"verdict={ai_consensus}"
+            )
+            
+        except Exception as e:
+            # AI Council error - default to REJECTED (safety first)
+            ai_consensus = "REJECTED"
+            ai_rejection_reason = f"AI Council error: {str(e)[:200]}"
+            print(f"[AI-ERR] Council failed for {correlation_id}: {e}")
+    elif risk_status == "REJECTED":
+        ai_consensus = "SKIPPED"
+        ai_rejection_reason = "Risk assessment rejected - AI debate skipped"
+    
+    # ========================================================================
+    # STEP 10: Persist AI Debate to Audit Log
+    # ========================================================================
+    if debate_result is not None:
+        try:
+            ai_insert_sql = text("""
+                INSERT INTO ai_debates (
+                    correlation_id,
+                    bull_reasoning,
+                    bear_reasoning,
+                    consensus_score,
+                    final_verdict
+                ) VALUES (
+                    :correlation_id,
+                    :bull_reasoning,
+                    :bear_reasoning,
+                    :consensus_score,
+                    :final_verdict
+                )
+            """)
+            
+            db.execute(
+                ai_insert_sql,
+                {
+                    "correlation_id": str(correlation_id),
+                    "bull_reasoning": debate_result.bull_reasoning,
+                    "bear_reasoning": debate_result.bear_reasoning,
+                    "consensus_score": debate_result.consensus_score,
+                    "final_verdict": debate_result.final_verdict
+                }
+            )
+            db.commit()
+            
+            print(f"[AI-AUDIT] Debate persisted for {correlation_id}")
+            
+        except Exception as e:
+            db.rollback()
+            # Log but don't fail - signal and risk are already persisted
+            print(f"[DB-502] AI debate insert failed: {e}")
+    
+    # ========================================================================
+    # STEP 11: Calculate processing time
     # ========================================================================
     end_time = datetime.now(timezone.utc)
     processing_ms = (end_time - start_time).total_seconds() * 1000
@@ -432,7 +520,18 @@ async def receive_tradingview_signal(
         print(f"[WARN] Hot Path exceeded 50ms target: {processing_ms:.2f}ms")
     
     # ========================================================================
-    # STEP 10: Return success response with risk assessment
+    # STEP 12: Determine final trade status
+    # ========================================================================
+    # Trade only proceeds if BOTH risk AND AI approve
+    if risk_status == "APPROVED" and ai_consensus == "APPROVED":
+        final_status = "APPROVED"
+        trade_action = "PROCEED"
+    else:
+        final_status = "REJECTED"
+        trade_action = "HALT"
+    
+    # ========================================================================
+    # STEP 13: Return success response with full pipeline status
     # ========================================================================
     response = {
         "status": "accepted",
@@ -448,6 +547,16 @@ async def receive_tradingview_signal(
             "risk_amount_zar": str(risk_profile.risk_amount_zar) if risk_profile else None,
             "equity": str(risk_profile.equity) if risk_profile else None,
             "rejection_reason": risk_rejection_reason
+        },
+        "ai_consensus": {
+            "status": ai_consensus,
+            "consensus_score": debate_result.consensus_score if debate_result else None,
+            "final_verdict": debate_result.final_verdict if debate_result else None,
+            "rejection_reason": ai_rejection_reason
+        },
+        "trade_decision": {
+            "status": final_status,
+            "action": trade_action
         }
     }
     
