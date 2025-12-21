@@ -1,0 +1,21 @@
+{
+  "enabled": true,
+  "name": "Floor & Emergency Protocol",
+  "description": "Actively monitors account state files for changes that could indicate catastrophic loss, such as large balance drops, unusual transactions, or critical threshold breaches. Alerts and provides guidance when potential issues are detected.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/account*.json",
+      "**/balance*.json",
+      "**/portfolio*.json",
+      "**/positions*.json",
+      "**/state*.json",
+      "**/wallet*.json"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "CRITICAL: An account state file has been modified. Immediately analyze the changes for signs of catastrophic loss including: 1) Large sudden balance decreases (>10%), 2) Unusual or unauthorized transactions, 3) Position liquidations, 4) Margin calls or threshold breaches, 5) Suspicious withdrawal patterns. If any concerning patterns are detected, alert the user immediately with specific details and recommended actions to prevent further loss. Provide a clear risk assessment."
+  }
+}

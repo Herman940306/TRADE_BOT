@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Immutable Logging & Reconciliation",
+  "description": "Cleans up temporary signal files after they have been safely written to the PostgreSQL DB. Verifies correlation_id exists in the signals table, cross-checks DB hash with local file hash, and logs successful archival in the audit_chain.",
+  "version": "1",
+  "when": {
+    "type": "fileDeleted",
+    "patterns": [
+      "/processing/active_signals/*.json"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A signal file has been deleted from /processing/active_signals/. This indicates the file has been persisted to the PostgreSQL database. Please perform the following reconciliation steps:\n\n1. **Verify DB Persistence**: Query the PostgreSQL signals table to confirm the correlation_id from the deleted file exists in the database.\n\n2. **Hash Verification**: Cross-check that the hash stored in the database matches the hash of the file content that was just deleted (if the hash was captured before deletion).\n\n3. **Audit Logging**: Log the successful archival of this signal in the audit_chain table, including:\n   - The correlation_id\n   - Timestamp of archival\n   - Verification status (hash match confirmed)\n   - Source file path that was deleted\n\n4. **Report any discrepancies**: If the correlation_id is not found in the DB or if there's a hash mismatch, flag this as a potential data integrity issue that requires investigation."
+  }
+}

@@ -1,0 +1,35 @@
+# ============================================================================
+# Project Autonomous Alpha v1.3.2
+# PostgreSQL Development Environment
+# ============================================================================
+#
+# USAGE:
+#   docker-compose up -d        # Start PostgreSQL
+#   docker-compose down         # Stop PostgreSQL
+#   docker-compose down -v      # Stop and remove data volume
+#
+# ============================================================================
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: autonomous_alpha_db
+    environment:
+      POSTGRES_DB: autonomous_alpha
+      POSTGRES_USER: sovereign
+      POSTGRES_PASSWORD: sovereign_secret_2024
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sovereign -d autonomous_alpha"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

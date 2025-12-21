@@ -1,0 +1,48 @@
+# ============================================================================
+# Project Autonomous Alpha v1.3.2
+# Python Dependencies - Sovereign Tier Infrastructure
+# ============================================================================
+#
+# INSTALLATION:
+#   pip install -r requirements.txt
+#
+# SECURITY NOTE:
+#   All versions are pinned for reproducibility.
+#   Update only after thorough testing.
+#
+# ============================================================================
+
+# Web Framework (Hot Path Ingress)
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+
+# Data Validation (Zero-Float Mandate)
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Database (PostgreSQL with app_trading role)
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+
+# Configuration Management
+python-dotenv==1.0.0
+
+# Cryptography (HMAC-SHA256 Signature Verification)
+cryptography==41.0.7
+
+# HTTP Client (Testing)
+requests==2.31.0
+
+# ============================================================================
+# Development Dependencies (Optional)
+# ============================================================================
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+hypothesis==6.92.2
+
+# Code Quality
+black==23.12.1
+isort==5.13.2
+mypy==1.8.0

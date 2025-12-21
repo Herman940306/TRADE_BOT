@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "name": "The Hot-Path Guardian",
+  "description": "Monitors code changes to ensure the execution loop remains lightweight and free of AI-latency. Flags any patterns that could introduce blocking calls, synchronous AI requests, or heavy computations in the main execution path.",
+  "version": "1",
+  "when": {
+    "type": "fileCreated",
+    "patterns": [
+      "Code_Generation:Hot_Path",
+      ".json"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "When generating code for the Webhook Receiver or Execution Engine:\n\n1. No LLMs: You are forbidden from placing LLM calls or complex reasoning inside the Hot Path.\n\n2. Latency: Ensure the logic can execute in < 50ms.\n\n3. Security: Every endpoint must include HMAC signature verification and IP whitelisting logic.\n\n4. Idempotency: Every trade request must be guarded by a unique X-Idempotency-Key check."
+  }
+}

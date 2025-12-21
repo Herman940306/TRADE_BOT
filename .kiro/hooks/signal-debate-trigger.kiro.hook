@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "name": "Adversarial Debate Logic",
+  "description": "Initiates an AI debate when a signal file is saved and ready for analysis",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/signal*.json",
+      "**/signals/**"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Triggered when a signal is moved to /processing/active_signals/.\n\n1. Initiate the Debate: DeepSeek-R1 must find 3 reasons to REJECT the trade.\n\n2. Llama 3.1 must confirm Market Mood.\n\n3. If Debate results in a \"PASS,\" append the decision to the file and move it to /execution/approved/.\n\n4. Hard 30s timeout; if exceeded, default to BLOCK."
+  }
+}
