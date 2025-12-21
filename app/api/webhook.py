@@ -45,6 +45,7 @@ from pydantic import ValidationError
 from app.schemas.signal import SignalIn, SignalOut
 from app.auth.security import verify_hmac_signature, HMACVerificationError
 from app.database.session import get_db
+from app.logic.risk_manager import calculate_position_size, RiskProfile
 
 
 # ============================================================================
@@ -345,7 +346,83 @@ async def receive_tradingview_signal(
         )
     
     # ========================================================================
-    # STEP 7: Calculate processing time
+    # STEP 7: SOVEREIGN BRAIN - Risk Assessment
+    # ========================================================================
+    risk_profile: Optional[RiskProfile] = None
+    risk_status = "PENDING"
+    risk_rejection_reason: Optional[str] = None
+    
+    try:
+        # Calculate position size using the Sovereign Risk Formula
+        risk_profile = calculate_position_size(
+            signal_price=signal_in.price,
+            correlation_id=str(correlation_id)
+        )
+        risk_status = "APPROVED"
+        
+    except RuntimeError as e:
+        # RISK-001 or RISK-002 guardrail triggered
+        error_str = str(e)
+        risk_status = "REJECTED"
+        risk_rejection_reason = error_str[:255]
+        print(f"[RISK] Assessment rejected for {correlation_id}: {error_str}")
+    except Exception as e:
+        # Unexpected error - log but don't fail the signal
+        error_str = str(e)
+        risk_status = "REJECTED"
+        risk_rejection_reason = f"Unexpected error: {error_str[:200]}"
+        print(f"[RISK-ERR] Unexpected error for {correlation_id}: {error_str}")
+    
+    # ========================================================================
+    # STEP 8: Persist Risk Assessment to Audit Log
+    # ========================================================================
+    try:
+        risk_insert_sql = text("""
+            INSERT INTO risk_assessments (
+                correlation_id,
+                equity,
+                signal_price,
+                risk_percentage,
+                risk_amount_zar,
+                calculated_quantity,
+                status,
+                rejection_reason,
+                row_hash
+            ) VALUES (
+                :correlation_id,
+                :equity,
+                :signal_price,
+                :risk_percentage,
+                :risk_amount_zar,
+                :calculated_quantity,
+                :status,
+                :rejection_reason,
+                'placeholder'
+            )
+        """)
+        
+        db.execute(
+            risk_insert_sql,
+            {
+                "correlation_id": str(correlation_id),
+                "equity": str(risk_profile.equity) if risk_profile else "0",
+                "signal_price": str(signal_in.price),
+                "risk_percentage": str(risk_profile.risk_percentage) if risk_profile else "0.01",
+                "risk_amount_zar": str(risk_profile.risk_amount_zar) if risk_profile else "0",
+                "calculated_quantity": str(risk_profile.calculated_quantity) if risk_profile else "0",
+                "status": risk_status,
+                "rejection_reason": risk_rejection_reason
+            }
+        )
+        db.commit()
+        
+    except Exception as e:
+        db.rollback()
+        # Log but don't fail - signal is already persisted
+        print(f"[DB-501] Risk assessment insert failed: {e}")
+    
+    # ========================================================================
+    # STEP 9: Calculate processing time
     # ========================================================================
     end_time = datetime.now(timezone.utc)
     processing_ms = (end_time - start_time).total_seconds() * 1000
@@ -355,17 +432,26 @@ async def receive_tradingview_signal(
         print(f"[WARN] Hot Path exceeded 50ms target: {processing_ms:.2f}ms")
     
     # ========================================================================
-    # STEP 8: Return success response
+    # STEP 10: Return success response with risk assessment
     # ========================================================================
-    return {
+    response = {
         "status": "accepted",
         "correlation_id": str(correlation_id),
         "signal_id": signal_in.signal_id,
         "record_id": record_id,
         "timestamp": created_at.isoformat() if created_at else end_time.isoformat(),
         "processing_ms": round(processing_ms, 2),
-        "hmac_verified": hmac_verified
+        "hmac_verified": hmac_verified,
+        "risk_assessment": {
+            "status": risk_status,
+            "calculated_quantity": str(risk_profile.calculated_quantity) if risk_profile else None,
+            "risk_amount_zar": str(risk_profile.risk_amount_zar) if risk_profile else None,
+            "equity": str(risk_profile.equity) if risk_profile else None,
+            "rejection_reason": risk_rejection_reason
+        }
     }
+    
+    return response
 
 
 # ============================================================================
