@@ -1,0 +1,21 @@
+# ============================================================================
+# Project Autonomous Alpha v1.4.0
+# Aura MCP Bridge - Dependencies
+# ============================================================================
+
+# MCP SDK for Model Context Protocol
+mcp>=1.0.0
+
+# Web framework for SSE transport
+starlette>=0.35.0
+uvicorn[standard]>=0.27.0
+
+# Database connectivity
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.25
+
+# HTTP client for Prometheus queries
+httpx==0.28.1
+
+# Environment management
+python-dotenv==1.0.0

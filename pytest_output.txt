@@ -1,0 +1,10 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-7.4.4, pluggy-1.6.0
+rootdir: F:\Kiro_Projects\TRADE_BOT
+plugins: anyio-4.12.0, hypothesis-6.92.2, asyncio-0.23.3
+asyncio: mode=Mode.STRICT
+collected 543 items
+
+tests\integration\test_budget_bridge.py .........                        [  1%]
+tests\integration\test_pipeline_integration.py ...................       [  5%]
+tests\properties\test_decision_synthesis.py .............                [  7%]

@@ -1,3 +1,6 @@
+---
+inclusion: always
+---
 KIRO_STEERING.md: Global Agent Directives
 Project: Autonomous Alpha (v1.3.0)
 

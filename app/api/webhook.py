@@ -1,6 +1,6 @@
 """
 ============================================================================
-Project Autonomous Alpha v1.3.2
+Project Autonomous Alpha v1.5.0
 Webhook API - TradingView Signal Ingestion (Hot Path)
 ============================================================================
 
@@ -12,20 +12,30 @@ Input Constraints:
 Side Effects: 
     - Inserts signal into immutable audit log
     - Generates correlation_id for downstream tracing
+    - Evaluates BudgetGuard operational gating
 
 SOVEREIGN MANDATE:
 - Acknowledge webhooks in < 50ms
 - Byte-perfect HMAC verification (no parsing before auth)
 - Zero tolerance for floating-point math
 - Atomic database writes with full audit trail
+- Financial Air-Gap via BudgetGuard integration
 
 HOT PATH FLOW:
 1. Receive raw bytes
 2. Verify HMAC signature (byte-perfect)
 3. Parse JSON to Pydantic model (validates decimals)
 4. Generate correlation_id (UUID4)
-5. Atomic INSERT to signals table
-6. Return correlation_id for tracing
+5. Extract client IP
+6. Atomic INSERT to signals table
+7. BudgetGuard Operational Gating (non-blocking)
+8. Risk Assessment (Sovereign Brain)
+9. Persist Risk Assessment
+10. AI Council Debate (Cold Path)
+11. Persist AI Debate
+12. Calculate processing time
+13. Determine final trade status
+14. Return correlation_id for tracing
 
 ============================================================================
 """
@@ -46,7 +56,11 @@ from app.schemas.signal import SignalIn, SignalOut
 from app.auth.security import verify_hmac_signature, HMACVerificationError
 from app.database.session import get_db
 from app.logic.risk_manager import calculate_position_size, RiskProfile
-from app.logic.ai_council import AICouncil, DebateResult, ModelVerdict
+from app.logic.ai_council import AICouncil, DebateResult, ModelVerdict, get_ai_council
+from app.logic.budget_integration import check_trade_allowed, TradeGatingContext
+from app.logic.operational_gating import GatingSignal
+from app.observability.metrics import record_signal_received, record_signal_executed
+from app.observability.discord_notifier import DiscordNotifier, AlertLevel, EmbedColor
 
 
 # ============================================================================
@@ -315,6 +329,13 @@ async def receive_tradingview_signal(
         record_id = row[0]
         created_at = row[1]
         
+        # Record signal received metric
+        record_signal_received(
+            symbol=signal_in.symbol,
+            action=signal_in.side.value if hasattr(signal_in.side, 'value') else str(signal_in.side),
+            correlation_id=str(correlation_id)
+        )
+        
     except Exception as e:
         db.rollback()
         error_str = str(e)
@@ -347,7 +368,51 @@ async def receive_tradingview_signal(
         )
     
     # ========================================================================
-    # STEP 7: SOVEREIGN BRAIN - Risk Assessment
+    # STEP 7: OPERATIONAL GATING - BudgetGuard Financial Air-Gap
+    # ========================================================================
+    # NON-BREAKING: If budget unavailable, allows trading unless Strict Mode
+    budget_gating: Optional[TradeGatingContext] = None
+    budget_status = "PENDING"
+    budget_rejection_reason: Optional[str] = None
+    
+    try:
+        budget_gating = check_trade_allowed(
+            trade_correlation_id=str(correlation_id),
+            projected_cost=None,  # No projected cost for signal ingestion
+            gross_profit_zar=None  # Net Alpha calculated post-trade
+        )
+        
+        if budget_gating.can_execute:
+            budget_status = "APPROVED"
+        else:
+            budget_status = "REJECTED"
+            budget_rejection_reason = budget_gating.reason
+            print(
+                f"[BUDGET_GATING] Trade blocked: signal={budget_gating.gating_signal.value} "
+                f"reason={budget_gating.reason} "
+                f"correlation_id={correlation_id} "
+                f"budget_correlation_id={budget_gating.budget_correlation_id}"
+            )
+    except Exception as e:
+        # Budget gating error - log but don't fail (non-breaking)
+        budget_status = "ERROR"
+        budget_rejection_reason = f"Budget gating error: {str(e)[:200]}"
+        print(f"[BUDGET_ERR] Gating failed for {correlation_id}: {e}")
+        # Create fallback context allowing trade (non-strict behavior)
+        budget_gating = TradeGatingContext(
+            trade_correlation_id=str(correlation_id),
+            budget_correlation_id=None,
+            gating_signal=GatingSignal.ALLOW,
+            can_execute=True,
+            net_alpha_zar=None,
+            operational_cost_zar=None,
+            rds_limit=None,
+            risk_level=None,
+            reason="Budget gating error (non-blocking fallback)"
+        )
+    
+    # ========================================================================
+    # STEP 8: SOVEREIGN BRAIN - Risk Assessment
     # ========================================================================
     risk_profile: Optional[RiskProfile] = None
     risk_status = "PENDING"
@@ -375,7 +440,7 @@ async def receive_tradingview_signal(
         print(f"[RISK-ERR] Unexpected error for {correlation_id}: {error_str}")
     
     # ========================================================================
-    # STEP 8: Persist Risk Assessment to Audit Log
+    # STEP 9: Persist Risk Assessment to Audit Log
     # ========================================================================
     try:
         risk_insert_sql = text("""
@@ -423,17 +488,18 @@ async def receive_tradingview_signal(
         print(f"[DB-501] Risk assessment insert failed: {e}")
     
     # ========================================================================
-    # STEP 9: COLD PATH AI - AI Council Debate
+    # STEP 10: COLD PATH AI - AI Council Debate
     # ========================================================================
-    # Only proceed with AI debate if risk assessment was approved
+    # Only proceed with AI debate if budget AND risk assessment were approved
     ai_consensus = "SKIPPED"
     ai_rejection_reason: Optional[str] = None
     debate_result: Optional[DebateResult] = None
     
-    if risk_status == "APPROVED" and risk_profile is not None:
+    if budget_status == "APPROVED" and risk_status == "APPROVED" and risk_profile is not None:
         try:
-            # Initialize AI Council with zero-cost models
-            council = AICouncil()
+            # Initialize AI Council (uses Ollama if USE_LOCAL_OLLAMA=true, else OpenRouter)
+            CouncilClass = get_ai_council()
+            council = CouncilClass()
             
             # Conduct Bull/Bear debate (synchronous - must complete before response)
             debate_result = await council.conduct_debate(
@@ -468,25 +534,41 @@ async def receive_tradingview_signal(
     elif risk_status == "REJECTED":
         ai_consensus = "SKIPPED"
         ai_rejection_reason = "Risk assessment rejected - AI debate skipped"
+    elif budget_status == "REJECTED":
+        ai_consensus = "SKIPPED"
+        ai_rejection_reason = "Budget gating rejected - AI debate skipped"
     
     # ========================================================================
-    # STEP 10: Persist AI Debate to Audit Log
+    # STEP 11: Persist AI Debate to Audit Log
     # ========================================================================
     if debate_result is not None:
         try:
+            # Compute row_hash as fallback (trigger should do this, but may be missing)
+            import hashlib
+            hash_input = (
+                str(correlation_id) + "|" +
+                debate_result.bull_reasoning + "|" +
+                debate_result.bear_reasoning + "|" +
+                str(debate_result.consensus_score) + "|" +
+                str(debate_result.final_verdict)
+            )
+            row_hash = hashlib.sha256(hash_input.encode()).hexdigest()
+            
             ai_insert_sql = text("""
                 INSERT INTO ai_debates (
                     correlation_id,
                     bull_reasoning,
                     bear_reasoning,
                     consensus_score,
-                    final_verdict
+                    final_verdict,
+                    row_hash
                 ) VALUES (
                     :correlation_id,
                     :bull_reasoning,
                     :bear_reasoning,
                     :consensus_score,
-                    :final_verdict
+                    :final_verdict,
+                    :row_hash
                 )
             """)
             
@@ -497,7 +579,8 @@ async def receive_tradingview_signal(
                     "bull_reasoning": debate_result.bull_reasoning,
                     "bear_reasoning": debate_result.bear_reasoning,
                     "consensus_score": debate_result.consensus_score,
-                    "final_verdict": debate_result.final_verdict
+                    "final_verdict": debate_result.final_verdict,
+                    "row_hash": row_hash
                 }
             )
             db.commit()
@@ -510,7 +593,7 @@ async def receive_tradingview_signal(
             print(f"[DB-502] AI debate insert failed: {e}")
     
     # ========================================================================
-    # STEP 11: Calculate processing time
+    # STEP 12: Calculate processing time
     # ========================================================================
     end_time = datetime.now(timezone.utc)
     processing_ms = (end_time - start_time).total_seconds() * 1000
@@ -520,18 +603,84 @@ async def receive_tradingview_signal(
         print(f"[WARN] Hot Path exceeded 50ms target: {processing_ms:.2f}ms")
     
     # ========================================================================
-    # STEP 12: Determine final trade status
+    # STEP 13: Determine final trade status
     # ========================================================================
-    # Trade only proceeds if BOTH risk AND AI approve
-    if risk_status == "APPROVED" and ai_consensus == "APPROVED":
+    # Trade only proceeds if BUDGET, RISK, and AI all approve
+    if budget_status == "APPROVED" and risk_status == "APPROVED" and ai_consensus == "APPROVED":
         final_status = "APPROVED"
         trade_action = "PROCEED"
+        # Record executed signal metric
+        record_signal_executed(
+            symbol=signal_in.symbol,
+            action=signal_in.side.value if hasattr(signal_in.side, 'value') else str(signal_in.side),
+            status="EXECUTED",
+            correlation_id=str(correlation_id)
+        )
     else:
         final_status = "REJECTED"
         trade_action = "HALT"
+        # Record rejected signal metric
+        record_signal_executed(
+            symbol=signal_in.symbol,
+            action=signal_in.side.value if hasattr(signal_in.side, 'value') else str(signal_in.side),
+            status="REJECTED",
+            correlation_id=str(correlation_id)
+        )
     
     # ========================================================================
-    # STEP 13: Return success response with full pipeline status
+    # STEP 14: Send Discord Notification (Non-Blocking)
+    # ========================================================================
+    try:
+        notifier = DiscordNotifier()
+        
+        # Get side as string (handle both Enum and str)
+        side_str = signal_in.side.value if hasattr(signal_in.side, 'value') else str(signal_in.side)
+        
+        # Determine color and alert level based on decision
+        if final_status == "APPROVED":
+            color = EmbedColor.SUCCESS.value  # Use .value for int
+            alert_level = AlertLevel.INFO
+            title = f"🚀 TRADE APPROVED: {side_str} {signal_in.symbol}"
+        else:
+            color = EmbedColor.WARNING.value  # Use .value for int
+            alert_level = AlertLevel.WARNING
+            title = f"🛑 TRADE REJECTED: {side_str} {signal_in.symbol}"
+        
+        # Build description with key details
+        description_lines = [
+            f"**Correlation ID:** `{correlation_id}`",
+            f"**Signal:** {side_str} @ R {signal_in.price:,.2f}",
+            "",
+            f"**Budget:** {budget_status}",
+            f"**Risk:** {risk_status}",
+            f"**AI Council:** {ai_consensus} (score: {debate_result.consensus_score if debate_result else 'N/A'})",
+            "",
+            f"**Final Decision:** {final_status} → {trade_action}",
+            f"**Processing:** {processing_ms:.0f}ms"
+        ]
+        
+        # Add rejection reasons if any
+        if budget_rejection_reason:
+            description_lines.append(f"**Budget Reason:** {budget_rejection_reason}")
+        if risk_rejection_reason:
+            description_lines.append(f"**Risk Reason:** {risk_rejection_reason}")
+        if ai_rejection_reason:
+            description_lines.append(f"**AI Reason:** {ai_rejection_reason}")
+        
+        notifier.send_embed(
+            title=title,
+            description="\n".join(description_lines),
+            color=color,
+            alert_level=alert_level,
+            correlation_id=str(correlation_id),
+            blocking=False  # Fire-and-forget to not delay response
+        )
+    except Exception as e:
+        # Discord failure should never block trading
+        print(f"[DISCORD-ERR] Failed to send notification: {e}")
+    
+    # ========================================================================
+    # STEP 15: Return success response with full pipeline status
     # ========================================================================
     response = {
         "status": "accepted",
@@ -541,6 +690,15 @@ async def receive_tradingview_signal(
         "timestamp": created_at.isoformat() if created_at else end_time.isoformat(),
         "processing_ms": round(processing_ms, 2),
         "hmac_verified": hmac_verified,
+        "budget_gating": {
+            "status": budget_status,
+            "budget_correlation_id": budget_gating.budget_correlation_id if budget_gating else None,
+            "gating_signal": budget_gating.gating_signal.value if budget_gating else None,
+            "risk_level": budget_gating.risk_level.value if budget_gating and budget_gating.risk_level else None,
+            "operational_cost_zar": str(budget_gating.operational_cost_zar) if budget_gating and budget_gating.operational_cost_zar else None,
+            "net_alpha_zar": str(budget_gating.net_alpha_zar) if budget_gating and budget_gating.net_alpha_zar else None,
+            "rejection_reason": budget_rejection_reason
+        },
         "risk_assessment": {
             "status": risk_status,
             "calculated_quantity": str(risk_profile.calculated_quantity) if risk_profile else None,

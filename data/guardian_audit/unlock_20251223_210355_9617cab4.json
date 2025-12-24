@@ -1,0 +1,9 @@
+{
+  "unlock_id": "9617cab4-c5d5-4cae-b0f7-5a08b00ba95d",
+  "unlocked_at": "2025-12-23T21:03:55.235351+00:00",
+  "reason": "Legacy reset by test-operator",
+  "actor": "legacy:test-operator",
+  "previous_lock_id": "5a796af5-1f8d-47a1-978f-eb868c57fa98",
+  "previous_lock_reason": "Daily loss R1,000.00 (1.00%) exceeded 1.0% limit",
+  "correlation_id": "7138908d-a385-4398-b3b0-8b0f7b240948"
+}

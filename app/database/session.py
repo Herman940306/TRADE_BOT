@@ -44,12 +44,19 @@ def get_database_url() -> str:
         str: PostgreSQL connection URL
         
     Environment Variables:
+        DATABASE_URL: Full connection URL (preferred, used by Docker)
         DB_HOST: Database host (default: localhost)
         DB_PORT: Database port (default: 5432)
         DB_NAME: Database name (default: autonomous_alpha)
         DB_USER: Database user (default: app_trading)
         DB_PASSWORD: Database password (required)
     """
+    # Check for DATABASE_URL first (Docker/production deployment)
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        return database_url
+    
+    # Fall back to individual variables (local development)
     host = os.getenv("DB_HOST", "localhost")
     port = os.getenv("DB_PORT", "5432")
     name = os.getenv("DB_NAME", "autonomous_alpha")

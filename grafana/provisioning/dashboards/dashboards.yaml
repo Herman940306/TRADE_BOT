@@ -1,0 +1,17 @@
+# ============================================================================
+# Project Autonomous Alpha v1.7.0
+# Grafana Dashboard Provisioning - Observer Mode
+# ============================================================================
+apiVersion: 1
+
+providers:
+  - name: 'Sovereign Dashboards'
+    orgId: 1
+    folder: 'Sovereign'
+    folderUid: 'sovereign'
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "name": "Tool-First Task Checker",
+  "description": "Automatically prompts the agent to check the Tool-First-Reasoning-MCP steering document for available tools whenever a new task is started, ensuring tool-first reasoning is applied consistently",
+  "version": "1",
+  "when": {
+    "type": "fileCreated",
+    "patterns": [
+      ".py",
+      ".md",
+      "all",
+      ".html",
+      "sql"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Before starting any task, check the Tool-First-Reasoning-MCP steering document to see if there are tools available that can help with the task. Prioritize using available MCP tools from the 78-tool registry (2 aura-bridge, 76 aura-full) before writing custom code or generating solutions. Verify tool connectivity and NAS system status if needed."
+  },
+  "workspaceFolderName": "TRADE_BOT",
+  "shortName": "tool-first-check"
+}

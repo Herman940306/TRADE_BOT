@@ -33,8 +33,18 @@ cryptography==41.0.7
 # HTTP Client (Testing)
 requests==2.31.0
 
+# HTML Parsing (Strategy Ingestion Pipeline)
+beautifulsoup4==4.12.3
+lxml==5.1.0
+
 # HTTP Client (Async - AI Council)
 httpx==0.28.1
+
+# WebSocket Client (Binance Crypto Feed)
+websockets==12.0
+
+# Observability (Phase 6 - Prometheus Metrics)
+prometheus_client==0.19.0
 
 # ============================================================================
 # Development Dependencies (Optional)
