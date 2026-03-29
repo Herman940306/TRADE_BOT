@@ -1,0 +1,809 @@
+plan_id: ai-decision-path-audit
+objective: "Comprehensive audit of the AI/LLM decision-making path in Trade_Bot"
+focus_area: "AI Council, Ollama Integration, Prompt Engineering, Output Parsing, Context Building, Model Configuration"
+created_at: "2026-03-29T00:00:00Z"
+created_by: gem-researcher
+status: completed
+
+tldr: |
+  - TWO parallel AI paths exist: OpenRouter (cloud, free-tier models) and Ollama (local GPU, qwen3:8b). Selected by USE_LOCAL_OLLAMA env var.
+  - Hot path: webhook.py → risk_manager → ai_council.conduct_debate() → HITL gateway. AI debate is SYNCHRONOUS in the request path with 30-60s timeout.
+  - CRITICAL: No token counting, no context window management, no output schema validation, no prompt versioning, no retry logic for LLM calls.
+  - Pre-Trade Audit module (DeepSeek-R1) exists separately but is NOT wired into webhook hot path — appears unused in production.
+  - Verdict parsing is regex-based ("VERDICT: APPROVED/REJECTED") with fallback heuristics — fragile against model output variations.
+
+research_metadata:
+  methodology: "Hybrid retrieval: semantic_search + grep_search across all Python files, read_file for complete contents of 15+ files, relationship discovery via import tracing"
+  scope: "All AI/LLM-related files across app/logic/, app/api/, app/prompts/, aura_bridge/, services/, docker-compose configs, env templates"
+  confidence: high
+  coverage: 95
+
+# ===========================================================================
+# FILES ANALYZED
+# ===========================================================================
+files_analyzed:
+  - file: ai_council.py
+    path: app/logic/ai_council.py
+    purpose: "Core AI decision engine — Bull/Bear debate protocol with OpenRouter and Ollama backends"
+    key_elements:
+      - element: FreeModels
+        type: enum
+        location: "app/logic/ai_council.py:65-78"
+        description: "OpenRouter free-tier model IDs: BULL=mistral-7b-instruct:free, BEAR=qwen-2-7b-instruct:free"
+      - element: ModelVerdict
+        type: enum
+        location: "app/logic/ai_council.py:81-93"
+        description: "APPROVED, REJECTED, UNCERTAIN, ERROR"
+      - element: DebateResult
+        type: dataclass
+        location: "app/logic/ai_council.py:96-124"
+        description: "Immutable result with bull/bear reasoning, verdicts, consensus_score (0-100), final_verdict (bool)"
+      - element: _SYSTEM_PROMPT_BUDGET
+        type: variable
+        location: "app/logic/ai_council.py:134"
+        description: "Hard cap at 512 chars for system prompt — only token-adjacent budget"
+      - element: _load_system_prompt
+        type: function
+        location: "app/logic/ai_council.py:137-166"
+        description: "Loads from app/prompts/ai_council_system_prompt.txt, truncates at 512 chars, falls back to inline"
+      - element: BULL_PROMPT_TEMPLATE
+        type: variable
+        location: "app/logic/ai_council.py:169-192"
+        description: "Bullish analyst prompt with /no_think prefix, signal fields, 2-sentence + VERDICT format"
+      - element: BEAR_PROMPT_TEMPLATE
+        type: variable
+        location: "app/logic/ai_council.py:194-217"
+        description: "Bearish analyst prompt, risk-focused, same VERDICT format"
+      - element: AICouncil
+        type: class
+        location: "app/logic/ai_council.py:220-590"
+        description: "OpenRouter cloud backend — uses free-tier models, 30s timeout, temperature=0.3, max_tokens=500"
+      - element: AICouncil._call_openrouter
+        type: method
+        location: "app/logic/ai_council.py:280-370"
+        description: "HTTP POST to openrouter.ai with Bearer auth, max_tokens=500, temperature=0.3. Returns (reasoning, verdict)"
+      - element: AICouncil._parse_verdict
+        type: method
+        location: "app/logic/ai_council.py:372-420"
+        description: "Regex-based parsing: looks for 'VERDICT: APPROVED/REJECTED', falls back to keyword search, defaults to REJECTED"
+      - element: AICouncil._compute_consensus
+        type: method
+        location: "app/logic/ai_council.py:422-466"
+        description: "Both APPROVED=100/True, split=50/False, both REJECTED=0/False. Any UNCERTAIN/ERROR=0/False"
+      - element: AICouncil.conduct_debate
+        type: method
+        location: "app/logic/ai_council.py:468-590"
+        description: "Runs bull+bear concurrently via asyncio.gather, computes consensus"
+      - element: OllamaAICouncil
+        type: class
+        location: "app/logic/ai_council.py:625-900"
+        description: "Local Ollama backend — 60s timeout, temperature=0.3, num_predict=512, system prompt loaded from file"
+      - element: OllamaAICouncil._call_ollama
+        type: method
+        location: "app/logic/ai_council.py:670-770"
+        description: "POST to /api/generate, stream=False, prefers 'response' field, falls back to 'thinking' (DeepSeek compat)"
+      - element: OllamaAICouncil._parse_verdict
+        type: method
+        location: "app/logic/ai_council.py:772-800"
+        description: "Same regex-based parsing as AICouncil but defaults to UNCERTAIN (not REJECTED) on ambiguity"
+      - element: OllamaAICouncil._compute_consensus
+        type: method
+        location: "app/logic/ai_council.py:802-830"
+        description: "Same as AICouncil but ERROR on either side returns score=0 (not score=50)"
+      - element: get_ai_council
+        type: function
+        location: "app/logic/ai_council.py:930-950"
+        description: "Factory: checks USE_LOCAL_OLLAMA env var, returns class (not instance)"
+      - element: ArbitratedDebateResult
+        type: dataclass
+        location: "app/logic/ai_council.py:960-1020"
+        description: "Extended debate result with RGI trust_probability, adjusted_confidence, should_execute"
+      - element: conduct_arbitrated_debate
+        type: function
+        location: "app/logic/ai_council.py:1023-1180"
+        description: "Debate + RGI arbitration: llm_confidence * trust_probability * execution_health, 95% gate"
+    language: python
+    lines: 1180
+
+  - file: ollama_health.py
+    path: app/logic/ollama_health.py
+    purpose: "3-layer health verification for local Ollama: ping, model_loaded, smoke_test"
+    key_elements:
+      - element: OllamaHealthStatus
+        type: dataclass
+        location: "app/logic/ollama_health.py:37-63"
+        description: "Health snapshot with reachable, model_present, smoke_test_passed flags"
+      - element: ping_ollama
+        type: function
+        location: "app/logic/ollama_health.py:66-86"
+        description: "GET /api/tags with 5s timeout"
+      - element: model_loaded
+        type: function
+        location: "app/logic/ollama_health.py:89-125"
+        description: "Checks if model is listed in Ollama tag registry (splits on ':' for version matching)"
+      - element: smoke_test
+        type: function
+        location: "app/logic/ollama_health.py:128-185"
+        description: "Minimal inference: '/no_think Respond with: SYSTEM OK', temperature=0.0, num_predict=8, 60s timeout"
+      - element: check_ollama_health
+        type: function
+        location: "app/logic/ollama_health.py:188-240"
+        description: "Comprehensive health combining all 3 checks, sequential (not parallel)"
+    language: python
+    lines: 240
+
+  - file: ollama_context_builder.py
+    path: app/logic/ollama_context_builder.py
+    purpose: "DB-aware context injection for AI Council prompts"
+    key_elements:
+      - element: _HISTORY_LIMIT
+        type: variable
+        location: "app/logic/ollama_context_builder.py:38"
+        description: "Max 3 historical debates per symbol injected"
+      - element: _CONTEXT_BUDGET
+        type: variable
+        location: "app/logic/ollama_context_builder.py:41"
+        description: "600 char max for context block — prevents prompt bloat"
+      - element: _get_recent_debates
+        type: function
+        location: "app/logic/ollama_context_builder.py:44-82"
+        description: "SELECT from ai_debates with parameterized query, returns {created_at, final_verdict, consensus_score}"
+      - element: build_context_block
+        type: function
+        location: "app/logic/ollama_context_builder.py:85-160"
+        description: "Builds context with: execution_mode, demo_mode, guardian_state, recent debates. Truncates at 600 chars"
+    language: python
+    lines: 170
+
+  - file: ai_council_system_prompt.txt
+    path: app/prompts/ai_council_system_prompt.txt
+    purpose: "Guardrail system prompt for AI Council LLM (v1.0.0)"
+    key_elements:
+      - element: system_prompt
+        type: pattern
+        location: "app/prompts/ai_council_system_prompt.txt:1-7"
+        description: |
+          5 non-negotiable rules:
+          1. Judge solely on signal fields provided
+          2. Absent/implausible fields = REJECT
+          3. Ambiguity = REJECTED
+          4. Must end with "VERDICT: APPROVED" or "VERDICT: REJECTED"
+          5. No disclaimers after VERDICT line
+    language: plaintext
+    lines: 7
+
+  - file: pre_trade_audit.py
+    path: app/logic/pre_trade_audit.py
+    purpose: "Adversarial reasoning module using DeepSeek-R1 — generates 3 rejection reasons per trade"
+    key_elements:
+      - element: DEEPSEEK_MODEL
+        type: variable
+        location: "app/logic/pre_trade_audit.py:34"
+        description: "Default model: deepseek-r1:8b"
+      - element: AUDIT_TIMEOUT_SECONDS
+        type: variable
+        location: "app/logic/pre_trade_audit.py:35"
+        description: "30 second timeout for model response"
+      - element: CONFIDENCE_THRESHOLD
+        type: variable
+        location: "app/logic/pre_trade_audit.py:36"
+        description: "95.00 — Decimal threshold for approval"
+      - element: PreTradeAuditModule
+        type: class
+        location: "app/logic/pre_trade_audit.py:118-540"
+        description: "Adversarial audit: builds prompt asking for 3 rejection reasons + CONFIDENCE_SCORE, parses with regex"
+      - element: _build_adversarial_prompt
+        type: method
+        location: "app/logic/pre_trade_audit.py:168-200"
+        description: "Prompt instructs LLM to find 3 REJECTION reasons, output CONFIDENCE_SCORE 0-100"
+      - element: parse_rejection_reasons
+        type: method
+        location: "app/logic/pre_trade_audit.py:203-310"
+        description: "Regex parsing for REJECTION_REASON_1/2/3 and CONFIDENCE_SCORE. Pads missing reasons, defaults confidence to 50"
+      - element: _invoke_model
+        type: method
+        location: "app/logic/pre_trade_audit.py:313-350"
+        description: "asyncio.wait_for with configurable timeout, delegates to ollama_callback"
+      - element: audit_signal
+        type: method
+        location: "app/logic/pre_trade_audit.py:352-475"
+        description: "Full audit flow: build prompt → invoke → parse → threshold check → write audit"
+      - element: create_ollama_callback_from_mcp
+        type: function
+        location: "app/logic/pre_trade_audit.py:515-545"
+        description: "Factory to create Ollama callback via Aura MCP, temperature=0.3"
+    language: python
+    lines: 560
+
+  - file: confidence_arbiter.py
+    path: app/logic/confidence_arbiter.py
+    purpose: "RGI confidence arbitration — combines LLM confidence with learned trust"
+    key_elements:
+      - element: EXECUTION_THRESHOLD
+        type: variable
+        location: "app/logic/confidence_arbiter.py:28"
+        description: "95.00 Decimal — trades below default to CASH"
+      - element: ConfidenceArbiter.arbitrate
+        type: method
+        location: "app/logic/confidence_arbiter.py:120-180"
+        description: "Formula: adjusted = llm_confidence * trust_probability * execution_health. Quantized to 2dp"
+    language: python
+    lines: 245
+
+  - file: webhook.py
+    path: app/api/webhook.py
+    purpose: "Hot path: TradingView signal ingestion → AI debate → HITL approval"
+    key_elements:
+      - element: receive_tradingview_signal
+        type: function
+        location: "app/api/webhook.py:158-830"
+        description: "15-step hot path: HMAC → parse → persist → budget gate → risk calc → AI debate → persist debate → HITL request"
+      - element: "Step 10: AI Council"
+        type: pattern
+        location: "app/api/webhook.py:504-530"
+        description: "get_ai_council() factory → CouncilClass() → council.conduct_debate(). Skips if budget/risk rejected"
+      - element: "Step 11: Persist Debate"
+        type: pattern
+        location: "app/api/webhook.py:535-580"
+        description: "INSERT INTO ai_debates with bull/bear reasoning, consensus_score, final_verdict, row_hash"
+      - element: "Step 13.5: HITL"
+        type: pattern
+        location: "app/api/webhook.py:650-730"
+        description: "Creates HITL approval request if all gates approved. Fail-closed if HITL unavailable"
+    language: python
+    lines: 830
+
+  - file: dispatcher.py
+    path: app/logic/dispatcher.py
+    purpose: "Trade execution nervous system — connects AI decisions to exchange execution"
+    key_elements:
+      - element: Dispatcher._fetch_debate_verdict
+        type: method
+        location: "app/logic/dispatcher.py:222-260"
+        description: "SELECT from ai_debates JOIN signals to get verdict, consensus_score, side"
+      - element: Dispatcher
+        type: class
+        location: "app/logic/dispatcher.py:155-300"
+        description: "Post-debate execution: kill switch → fetch verdict → validate viability → size → execute"
+    language: python
+    lines: 300
+
+  - file: debate_memory.py
+    path: app/logic/debate_memory.py
+    purpose: "RAG indexing of debate results — chunks reasoning into 512-token segments for retrieval"
+    key_elements:
+      - element: MAX_CHUNK_CHARS
+        type: variable
+        location: "app/logic/debate_memory.py:45"
+        description: "1500 chars (~375 tokens) per chunk"
+      - element: CHUNK_OVERLAP_CHARS
+        type: variable
+        location: "app/logic/debate_memory.py:46"
+        description: "200 chars overlap between chunks"
+      - element: chunk_text
+        type: function
+        location: "app/logic/debate_memory.py:105-160"
+        description: "Sentence-boundary-aware chunking with overlap"
+      - element: index_debate
+        type: function
+        location: "app/logic/debate_memory.py:170-300"
+        description: "Combines bull+bear reasoning → chunks → REQ upserts to Aura MCP RAG"
+    language: python
+    lines: 300
+
+  - file: sovereign_intel.py
+    path: app/logic/sovereign_intel.py
+    purpose: "Pre-debate context enrichment — RAG query, ML predictions, RGI trust"
+    key_elements:
+      - element: PredictiveContext
+        type: dataclass
+        location: "app/logic/sovereign_intel.py:75-140"
+        description: "Aggregated context: similar_debates, ml_confidence, historical_win_rate, rgi_trust_probability"
+      - element: PredictiveContext.to_prompt_context
+        type: method
+        location: "app/logic/sovereign_intel.py:143-185"
+        description: "Formats context block for AI Council prompt injection: intelligence briefing with win rate, ML confidence, trust indicator"
+      - element: gather_predictive_context
+        type: function
+        location: "app/logic/sovereign_intel.py:200-400"
+        description: "4-step intelligence: RAG similar debates → ML predictions → historical metrics → RGI trust"
+    language: python
+    lines: 400
+
+  - file: reward_governor.py
+    path: app/learning/reward_governor.py
+    purpose: "LightGBM model wrapper for trust probability prediction"
+    key_elements:
+      - element: NEUTRAL_TRUST
+        type: variable
+        location: "app/learning/reward_governor.py:42"
+        description: "0.5000 — returned on any failure, model missing, timeout, or safe-mode"
+      - element: PREDICTION_TIMEOUT_MS
+        type: variable
+        location: "app/learning/reward_governor.py:45"
+        description: "50ms timeout for prediction to avoid blocking hot path"
+      - element: RewardGovernor.trust_probability
+        type: method
+        location: "app/learning/reward_governor.py:175-200"
+        description: "Predicts trust from FeatureSnapshot, ThreadPoolExecutor with timeout, Decimal output"
+    language: python
+    lines: 200
+
+  - file: execution_handshake.py
+    path: app/logic/execution_handshake.py
+    purpose: "Permit-based trade authorization — bridges AI decisions to execution"
+    key_elements:
+      - element: ExecutionHandshake.validate_permit
+        type: method
+        location: "app/logic/execution_handshake.py:120-200"
+        description: "Validates ExecutionPermit from RiskGovernor: qty>0, slippage valid, timeout>0, circuit breaker check"
+    language: python
+    lines: 200
+
+  - file: risk_governor.py
+    path: app/logic/risk_governor.py
+    purpose: "ATR-based position sizing and capital protection"
+    key_elements:
+      - element: ExecutionPermit
+        type: dataclass
+        location: "app/logic/risk_governor.py:72-112"
+        description: "Immutable permit: approved_qty, max_slippage_pct=0.15%, timeout=30s"
+      - element: DEFAULT_MAX_SLIPPAGE_PCT
+        type: variable
+        location: "app/logic/risk_governor.py:57"
+        description: "0.0015 (0.15%)"
+      - element: DEFAULT_TIMEOUT_SECONDS
+        type: variable
+        location: "app/logic/risk_governor.py:58"
+        description: "30 seconds"
+    language: python
+    lines: 200
+
+  - file: chat_service_mcp.py
+    path: aura_bridge/chat_service_mcp.py
+    purpose: "MCP bridge exposing 76 tools including 5 Ollama LLM tools"
+    key_elements:
+      - element: ollama_consult
+        type: pattern
+        location: "aura_bridge/chat_service_mcp.py:275-278"
+        description: "Chat with local LLMs — params: prompt, model, temperature"
+      - element: FullMCPBridge._route_tool (ollama_consult)
+        type: method
+        location: "aura_bridge/chat_service_mcp.py:494-500"
+        description: "POST to /llm/generate with prompt, model (default llama3.2:1b), temperature (default 0.7)"
+    language: python
+    lines: 600
+
+  - file: docker-compose.local.yml
+    path: docker-compose.local.yml
+    purpose: "Docker orchestration with Ollama service configuration"
+    key_elements:
+      - element: ollama service
+        type: pattern
+        location: "docker-compose.local.yml:86-120"
+        description: |
+          ollama/ollama:latest, port 11434, OLLAMA_MAX_LOADED_MODELS=1,
+          OLLAMA_KEEP_ALIVE=-1, OLLAMA_NUM_PARALLEL=1, OLLAMA_NUM_THREADS=4,
+          GPU acceleration commented out by default
+      - element: app env vars
+        type: pattern
+        location: "docker-compose.local.yml:40-43"
+        description: "OLLAMA_BASE_URL=http://ollama:11434, OLLAMA_MODEL=qwen3:8b, USE_LOCAL_OLLAMA=true"
+    language: yaml
+    lines: 120
+
+  - file: .env.example
+    path: .env.example
+    purpose: "Environment template with AI configuration"
+    key_elements:
+      - element: OPENROUTER_API_KEY
+        type: variable
+        location: ".env.example:113"
+        description: "OpenRouter API key placeholder"
+      - element: AI_CONSENSUS_THRESHOLD
+        type: variable
+        location: ".env.example:117"
+        description: "60 — but NOT used in code (code uses unanimous requirement)"
+    language: plaintext
+    lines: 130
+
+# ===========================================================================
+# PATTERNS FOUND
+# ===========================================================================
+patterns_found:
+  - category: architecture
+    pattern: "Dual AI Backend (OpenRouter + Ollama)"
+    description: |
+      Two completely separate AI backends share prompt templates but have different
+      implementations, timeouts, error handling, and verdict parsing behaviors.
+      Selection via USE_LOCAL_OLLAMA env var. Factory returns a CLASS not an instance.
+    examples:
+      - file: app/logic/ai_council.py
+        location: "line 930-950"
+        snippet: 'use_ollama = os.getenv("USE_LOCAL_OLLAMA", "").lower() in ("true", "1", "yes")'
+    prevalence: common
+
+  - category: architecture
+    pattern: "Synchronous AI in Request Path"
+    description: |
+      AI debate is executed SYNCHRONOUSLY in the webhook request handler.
+      The HTTP response is blocked until both bull and bear models respond.
+      With 60s Ollama timeout, webhook can take >120s in worst case.
+    examples:
+      - file: app/api/webhook.py
+        location: "line 508"
+        snippet: "debate_result = await council.conduct_debate(...)"
+    prevalence: common
+
+  - category: error_handling
+    pattern: "Fail-Closed Default"
+    description: |
+      All AI paths default to REJECTED on any error: timeout, parse failure,
+      empty response, HTTP error, unexpected exception. This is intentionally
+      conservative for capital preservation.
+    examples:
+      - file: app/logic/ai_council.py
+        location: "line 390-415"
+        snippet: "return ModelVerdict.REJECTED  # FINANCIAL GUARDRAIL"
+    prevalence: common
+
+  - category: error_handling
+    pattern: "No Retry Logic"
+    description: |
+      Neither OpenRouter nor Ollama calls include any retry mechanism.
+      A single transient failure (network blip, rate limit, cold start)
+      results in immediate REJECTED verdict with no recovery attempt.
+    examples:
+      - file: app/logic/ai_council.py
+        location: "line 345-370"
+        snippet: "return error_msg, ModelVerdict.ERROR"
+    prevalence: common
+
+  - category: naming
+    pattern: "Inconsistent Parse Behavior Between Backends"
+    description: |
+      AICouncil._parse_verdict defaults to REJECTED on ambiguity.
+      OllamaAICouncil._parse_verdict defaults to UNCERTAIN (which then maps to 0/False in consensus).
+      While both result in rejection, the path through consensus differs.
+    examples:
+      - file: app/logic/ai_council.py
+        location: "line 415 vs line 800"
+        snippet: "return ModelVerdict.REJECTED vs return ModelVerdict.UNCERTAIN"
+    prevalence: occasional
+
+  - category: architecture
+    pattern: "Context Builder Not Wired"
+    description: |
+      ollama_context_builder.py exists and can inject DB-aware context (execution mode,
+      guardian state, recent debates). sovereign_intel.py can gather RAG + ML context.
+      NEITHER is called in the webhook hot path — prompts contain only raw signal data.
+    examples:
+      - file: app/api/webhook.py
+        location: "line 504-530"
+        snippet: "No import or call to build_context_block or gather_predictive_context"
+    prevalence: rare
+
+  - category: architecture
+    pattern: "Pre-Trade Audit Disconnected"
+    description: |
+      PreTradeAuditModule in pre_trade_audit.py uses DeepSeek-R1 for adversarial reasoning
+      but is NOT imported or called in webhook.py or any hot path code. It appears to be
+      a standalone module for potential future use.
+    examples:
+      - file: app/api/webhook.py
+        location: "imports section"
+        snippet: "No import of pre_trade_audit"
+    prevalence: rare
+
+  - category: structure
+    pattern: "No Token Counting"
+    description: |
+      No tiktoken, no token estimation, no context window management anywhere in the codebase.
+      The only budget guards are: 512 char system prompt cap and 600 char context builder cap.
+      These are CHARACTER budgets, not token budgets.
+    examples:
+      - file: app/logic/ai_council.py
+        location: "line 134"
+        snippet: "_SYSTEM_PROMPT_BUDGET: int = 512  # chars, not tokens"
+    prevalence: rare
+
+  - category: structure
+    pattern: "No Output Schema Validation"
+    description: |
+      LLM responses are parsed with regex looking for "VERDICT: APPROVED/REJECTED".
+      There is no JSON schema validation, no structured output format, no Pydantic model
+      for LLM responses. The PreTradeAuditModule has slightly better parsing (structured
+      REJECTION_REASON_N fields) but also regex-based.
+    examples:
+      - file: app/logic/ai_council.py
+        location: "line 372-420"
+        snippet: 'if "VERDICT: APPROVED" in content_upper'
+    prevalence: common
+
+  - category: structure
+    pattern: "No Prompt Versioning"
+    description: |
+      System prompt has a version comment (v1.0.0) but no programmatic versioning.
+      Bull/Bear prompt templates are inline Python strings with no version tracking.
+      No prompt hash logging for audit trail.
+    examples:
+      - file: app/prompts/ai_council_system_prompt.txt
+        location: "line 1"
+        snippet: "# SYSTEM PROMPT v1.0.0"
+    prevalence: rare
+
+  - category: error_handling
+    pattern: "Broad Exception Catching"
+    description: |
+      AI calls catch generic Exception as final handler, which masks specific
+      failure modes (DNS resolution, SSL errors, JSON decode, OOM).
+    examples:
+      - file: app/logic/ai_council.py
+        location: "line 365"
+        snippet: "except Exception as e:"
+    prevalence: common
+
+# ===========================================================================
+# RELATED ARCHITECTURE
+# ===========================================================================
+related_architecture:
+  components_relevant_to_domain:
+    - component: "webhook.py (Hot Path)"
+      responsibility: "Signal ingestion, orchestrates AI debate in request path"
+      location: "app/api/webhook.py"
+      relationship_to_domain: "Primary caller of AI Council"
+    - component: "Dispatcher"
+      responsibility: "Post-debate execution — fetches verdict from DB"
+      location: "app/logic/dispatcher.py"
+      relationship_to_domain: "Consumes AI debate results"
+    - component: "HITLGateway"
+      responsibility: "Human-in-the-loop approval gate"
+      location: "services/hitl_gateway.py"
+      relationship_to_domain: "Receives AI consensus as input"
+    - component: "ConfidenceArbiter"
+      responsibility: "RGI formula: llm_confidence * trust * health"
+      location: "app/logic/confidence_arbiter.py"
+      relationship_to_domain: "Uses AI consensus score as llm_confidence input"
+    - component: "RewardGovernor"
+      responsibility: "LightGBM trust probability prediction"
+      location: "app/learning/reward_governor.py"
+      relationship_to_domain: "Provides trust_probability for arbitration formula"
+    - component: "DebateMemory"
+      responsibility: "RAG indexing of debate results"
+      location: "app/logic/debate_memory.py"
+      relationship_to_domain: "Stores debate reasoning for future retrieval"
+    - component: "SovereignIntel"
+      responsibility: "Pre-debate context enrichment"
+      location: "app/logic/sovereign_intel.py"
+      relationship_to_domain: "Gathers RAG+ML context for prompt injection (NOT currently wired)"
+
+  interfaces_used_by_domain:
+    - interface: "OpenRouter REST API"
+      location: "https://openrouter.ai/api/v1/chat/completions"
+      usage_pattern: "POST with Bearer auth, max_tokens=500, temperature=0.3"
+    - interface: "Ollama /api/generate"
+      location: "http://ollama:11434/api/generate"
+      usage_pattern: "POST with model, system, prompt, options.temperature=0.3, options.num_predict=512"
+    - interface: "Aura MCP Gateway"
+      location: "http://localhost:9200"
+      usage_pattern: "HTTP bridge for RAG, ML, Ollama tools (76 total)"
+
+  data_flow_involving_domain: |
+    TradingView webhook → HMAC verify → signal persist →
+    budget check → risk calc → AI Council debate (bull+bear concurrent) →
+    persist debate to ai_debates → HITL approval request →
+    (human approves) → execution via Dispatcher
+
+  key_relationships_to_domain:
+    - from: "webhook.py"
+      to: "ai_council.py"
+      relationship: "imports and calls get_ai_council(), conduct_debate()"
+    - from: "ai_council.py"
+      to: "ai_council_system_prompt.txt"
+      relationship: "loads system prompt from file"
+    - from: "ai_council.py"
+      to: "confidence_arbiter.py"
+      relationship: "imports for RGI arbitration flow"
+    - from: "ai_council.py"
+      to: "httpx"
+      relationship: "HTTP client for OpenRouter and Ollama calls"
+    - from: "sovereign_intel.py"
+      to: "aura_client.py"
+      relationship: "queries Aura MCP for RAG and ML data"
+    - from: "debate_memory.py"
+      to: "aura_client.py"
+      relationship: "upserts debate chunks to RAG vector store"
+
+# ===========================================================================
+# RELATED TECHNOLOGY STACK
+# ===========================================================================
+related_technology_stack:
+  languages_used_in_domain:
+    - python
+  frameworks_used_in_domain:
+    - name: httpx
+      usage_in_domain: "Async HTTP client for all LLM API calls (both OpenRouter and Ollama)"
+    - name: FastAPI
+      usage_in_domain: "Webhook endpoint that orchestrates AI debate"
+  libraries_used_in_domain:
+    - name: asyncio
+      purpose_in_domain: "Concurrent bull/bear debate execution via asyncio.gather"
+    - name: "decimal.Decimal"
+      purpose_in_domain: "All financial values and confidence scores"
+    - name: hashlib
+      purpose_in_domain: "Row hash computation for debate audit records"
+  external_apis_used_in_domain:
+    - name: "OpenRouter API"
+      integration_point: "https://openrouter.ai/api/v1/chat/completions"
+    - name: "Ollama API"
+      integration_point: "http://ollama:11434/api/generate"
+
+# ===========================================================================
+# RELATED CONVENTIONS
+# ===========================================================================
+related_conventions:
+  naming_patterns_in_domain: "ERR-AI-NNN for OpenRouter, ERR-OLLAMA-NNN for Ollama, SEC-HLT-NNN for health checks"
+  structure_of_domain: "Two backend classes sharing prompt templates; factory function; convenience wrappers"
+  error_handling_in_domain: "Cascading try/except: TimeoutException → RequestError → JSONDecodeError → Exception. All return ModelVerdict.ERROR"
+  testing_in_domain: "44 unit tests in test_ai_council.py (fully mocked); integration tests auto-skip when Ollama unreachable"
+  documentation_in_domain: "Extensive docstrings with Reliability Level, Input Constraints, Side Effects"
+
+# ===========================================================================
+# RELATED DEPENDENCIES
+# ===========================================================================
+related_dependencies:
+  internal:
+    - component: "app/prompts/ai_council_system_prompt.txt"
+      relationship_to_domain: "Loaded at OllamaAICouncil.__init__ time"
+      direction: inbound
+    - component: "app/logic/confidence_arbiter.py"
+      relationship_to_domain: "Used by conduct_arbitrated_debate"
+      direction: outbound
+    - component: "app/learning/reward_governor.py"
+      relationship_to_domain: "Provides trust_probability for arbitration"
+      direction: inbound
+    - component: "app/infra/aura_client.py"
+      relationship_to_domain: "Used by sovereign_intel and debate_memory for RAG+ML"
+      direction: outbound
+    - component: "app/logic/learning_features.py"
+      relationship_to_domain: "Provides FeatureSnapshot for RGI prediction"
+      direction: inbound
+  external:
+    - name: httpx
+      purpose_for_domain: "Async HTTP client for all LLM calls"
+    - name: "OpenRouter (cloud)"
+      purpose_for_domain: "Free-tier LLM inference (mistral-7b, qwen-2-7b)"
+    - name: "Ollama (local)"
+      purpose_for_domain: "Local GPU LLM inference (qwen3:8b)"
+
+# ===========================================================================
+# DOMAIN SECURITY CONSIDERATIONS
+# ===========================================================================
+domain_security_considerations:
+  sensitive_areas:
+    - area: "OpenRouter API Key"
+      location: "env var OPENROUTER_API_KEY, used in Bearer token"
+      concern: "Passed as header — logged indirectly if error responses include headers"
+    - area: "LLM Prompt Injection"
+      location: "BULL/BEAR prompt templates accept raw signal data"
+      concern: |
+        Signal fields (symbol, price, quantity) are interpolated directly into prompts
+        via f-string format. While these come from HMAC-verified TradingView payloads,
+        a compromised TV account could inject malicious prompt content.
+    - area: "Debate Reasoning Stored in DB"
+      location: "ai_debates table"
+      concern: "LLM outputs stored directly — could contain unexpected content if model misbehaves"
+  authentication_patterns_in_domain: "OpenRouter uses Bearer token. Ollama uses unauthenticated HTTP (internal Docker network)"
+  authorization_patterns_in_domain: "No authorization on Ollama calls — relies on Docker network isolation"
+  data_validation_in_domain: "Signal validated by Pydantic before AI path. LLM output validated only by regex verdict parsing"
+
+# ===========================================================================
+# TESTING PATTERNS
+# ===========================================================================
+testing_patterns:
+  framework: pytest
+  coverage_areas:
+    - "OllamaAICouncil configuration, parse_verdict, _compute_consensus, _call_ollama, conduct_debate"
+    - "Integration test with live Ollama (auto-skips when unreachable)"
+  test_organization: "tests/unit/test_ai_council.py (44 tests), tests/integration/test_ollama_integration.py"
+  mock_patterns:
+    - "httpx.AsyncClient mocked via monkeypatch for _call_ollama"
+    - "System prompt file loading mocked"
+    - "psycopg2, prometheus_client, app.database.session mocked in conftest"
+
+# ===========================================================================
+# OPEN QUESTIONS
+# ===========================================================================
+open_questions:
+  - question: "Why is ollama_context_builder.build_context_block() not called in webhook hot path?"
+    context: |
+      The context builder exists (600 char budget, DB-aware) but is never imported or called
+      in webhook.py. The AI Council prompts only contain raw signal fields.
+      This means the LLM has NO awareness of: execution mode, guardian state, recent debates.
+
+  - question: "Why is PreTradeAuditModule not wired into the hot path?"
+    context: |
+      A fully-implemented adversarial audit module exists using DeepSeek-R1 with 3-rejection-reason
+      protocol, but it's completely disconnected from the webhook flow. Was this intentional
+      (future phase) or an integration gap?
+
+  - question: "Why is sovereign_intel.gather_predictive_context() not called before debates?"
+    context: |
+      The intelligence gathering function exists (RAG + ML + RGI + historical win rate)
+      and it even has a to_prompt_context() method for injection. Not called anywhere in
+      the active trading path.
+
+  - question: "Why does AI_CONSENSUS_THRESHOLD env var exist if consensus logic is hardcoded to unanimous?"
+    context: |
+      .env.example sets AI_CONSENSUS_THRESHOLD=60 but the actual code requires BOTH models
+      to return APPROVED (consensus_score=100). The threshold env var is never referenced in code.
+
+  - question: "What happens when Ollama is cold and both bull/bear requests time out at 60s?"
+    context: |
+      The webhook handler awaits conduct_debate which runs both calls concurrently.
+      If Ollama needs to load the model (cold start), the first request can take 30-120s.
+      Meanwhile the TradingView webhook times out and the signal is effectively lost
+      (trade rejected but no retry mechanism exists).
+
+# ===========================================================================
+# GAPS
+# ===========================================================================
+gaps:
+  - area: "Token Budget Management"
+    description: |
+      No token counting anywhere in the codebase. System prompt budget is 512 CHARACTERS
+      (not tokens). Context builder budget is 600 CHARACTERS. Prompt templates have no
+      budget. There's no way to know if prompts exceed the model's context window.
+      qwen3:8b has 32K context, but without counting, a future prompt expansion could
+      silently truncate.
+    impact: "Silent context truncation if prompts grow beyond model limits"
+
+  - area: "Retry Logic"
+    description: |
+      Zero retry logic for LLM calls. A single transient failure (rate limit, network
+      timeout, Ollama cold start, DNS resolution) results in immediate ModelVerdict.ERROR
+      → consensus_score=0 → REJECTED. No exponential backoff, no circuit breaker for AI calls.
+    impact: "Transient failures permanently reject valid trade signals"
+
+  - area: "Output Schema Validation"
+    description: |
+      LLM output is parsed with regex ("VERDICT: APPROVED" or "VERDICT: REJECTED").
+      No JSON mode, no structured output, no Pydantic model for responses. The fallback
+      heuristic (looking for APPROVED/REJECTED anywhere) is fragile — a model saying
+      "I would have APPROVED but conditions require REJECTED" could confuse the parser.
+    impact: "Model output format changes could cause misclassified verdicts"
+
+  - area: "Prompt Versioning"
+    description: |
+      System prompt has manual v1.0.0 comment. Bull/Bear templates are inline Python strings.
+      No version hash, no audit log of which prompt version produced which verdict.
+      Changes to prompts are invisible to the audit trail.
+    impact: "Cannot correlate verdict quality changes to prompt modifications"
+
+  - area: "Context Builder Integration"
+    description: |
+      Three context enrichment modules exist (ollama_context_builder, sovereign_intel,
+      debate_memory) but NONE are called in the production webhook path. The AI models
+      make decisions with only raw signal data and no historical context.
+    impact: "AI decisions lack available historical context"
+
+  - area: "Model Fallback"
+    description: |
+      If primary OpenRouter model (mistral-7b) is unavailable, there's no fallback
+      to secondary model. If Ollama model isn't loaded, debate fails with ERROR.
+      No model health check before debate attempt.
+    impact: "Single model failure causes complete AI path failure"
+
+  - area: "Latency Budget"
+    description: |
+      Webhook should acknowledge in <50ms (per docstring) but AI debate is synchronous
+      in the request path. Ollama timeout is 60s. OpenRouter timeout is 30s. Two concurrent
+      calls. Worst case: 60s for Ollama, 30s for OpenRouter. No async decoupling.
+    impact: "TradingView webhook timeout, lost signals during high latency"
+
+  - area: "Duplicate AI Council Implementations"
+    description: |
+      AICouncil (OpenRouter) and OllamaAICouncil (Ollama) have duplicated logic for
+      verdict parsing, consensus computation, and debate orchestration. The parse_verdict
+      methods have DIFFERENT fallback behaviors (REJECTED vs UNCERTAIN).
+    impact: "Behavioral inconsistency between cloud and local AI paths"

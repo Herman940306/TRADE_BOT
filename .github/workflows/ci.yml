@@ -1,0 +1,152 @@
+# ============================================================================
+# Project Autonomous Alpha v1.9.0
+# GitHub Actions CI Pipeline - Sovereign Tier
+# ============================================================================
+#
+# Reliability Level: SOVEREIGN TIER
+# Purpose: Continuous Integration — lint, type-check, and test on every push
+#          so that the GitHub repository is the single source of truth.
+#
+# Triggers:
+#   - Push to main or any feature/fix/copilot branch
+#   - Pull requests targeting main
+#
+# Jobs:
+#   1. lint      — black, isort, mypy
+#   2. test      — pytest (unit + property + integration)
+#
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "copilot/**"
+      - "feature/**"
+      - "fix/**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # ==========================================================================
+  # JOB 1: LINT & TYPE-CHECK
+  # ==========================================================================
+  lint:
+    name: Lint & Type-Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: pip
+
+      - name: Install linting dependencies
+        run: |
+          pip install --upgrade pip
+          pip install black==23.12.1 isort==5.13.2 mypy==1.8.0
+
+      - name: Check formatting with black
+        run: black --check --diff .
+
+      - name: Check import order with isort
+        run: isort --check-only --diff .
+
+      - name: Type-check with mypy
+        run: mypy --ignore-missing-imports --no-strict-optional .
+
+  # ==========================================================================
+  # JOB 2: TEST SUITE
+  # ==========================================================================
+  test:
+    name: Test Suite (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9"]
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: autonomous_alpha_test
+          POSTGRES_USER: sovereign
+          POSTGRES_PASSWORD: sovereign_test_secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sovereign"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      EXECUTION_MODE: DEMO
+      DEMO_MODE: PAPER
+      DATABASE_URL: postgresql+psycopg2://sovereign:sovereign_test_secret@localhost:5432/autonomous_alpha_test
+      WEBHOOK_SECRET: ci_test_secret_minimum_32_characters_long
+      DISCORD_WEBHOOK_URL: ""
+      VALR_API_KEY: ""
+      VALR_API_SECRET: ""
+      OPENROUTER_API_KEY: ""
+      HITL_ENABLED: "false"
+      GUARDIAN_ENABLED: "false"
+      LOG_LEVEL: WARNING
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ \
+            -v \
+            --tb=short \
+            --asyncio-mode=strict \
+            -q
+
+      - name: Run property-based tests
+        run: |
+          pytest tests/properties/ \
+            -v \
+            --tb=short \
+            --asyncio-mode=strict \
+            -q
+
+      - name: Run integration tests
+        run: |
+          pytest tests/integration/ \
+            -v \
+            --tb=short \
+            --asyncio-mode=strict \
+            -q
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: .pytest_cache/
+          retention-days: 7

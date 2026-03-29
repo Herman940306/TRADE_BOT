@@ -1,0 +1,38 @@
+{
+  "pythonVersion": "3.9",
+  "pythonPlatform": "Linux",
+  "venvPath": "/home/wolf",
+  "venv": ".venv",
+  "typeCheckingMode": "strict",
+  "useLibraryCodeForTypes": true,
+
+  "include": [
+    "app",
+    "data_ingestion",
+    "aura_bridge",
+    "bridge"
+  ],
+
+  "exclude": [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/tests",
+    "**/.venv",
+    "**/.venv-win"
+  ],
+
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "warning",
+  "reportUndefinedVariable": "error",
+  "reportGeneralTypeIssues": "error",
+  "reportOptionalMemberAccess": "error",
+  "reportOptionalCall": "error",
+  "reportOptionalIterable": "error",
+  "reportOptionalSubscript": "error",
+  "reportPrivateImportUsage": "warning",
+
+  "strictParameterNoneValue": true,
+  "strictListInference": true,
+  "strictDictionaryInference": true,
+  "strictSetInference": true
+}

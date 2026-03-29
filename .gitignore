@@ -157,3 +157,6 @@ temp/
 # Sensitive Files Protected: .env*, data/, logs/, backups/
 # Confidence Score: [99/100]
 # ============================================================================
+
+# SonarLint
+.sonarlint/

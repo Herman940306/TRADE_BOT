@@ -1,0 +1,135 @@
+# ============================================================
+# Project Autonomous Alpha - REST Client Test Suite
+# Sovereign Tier | HITL Gateway + Guardian Endpoints
+# Usage: Select environment via "Rest Client: Switch Environment"
+#        local = http://localhost:8000
+#        nas   = http://<nas-ip>:8000
+# ============================================================
+
+@baseUrl = {{$dotenv BASE_URL}}
+@contentType = application/json
+
+# ============================================================
+# HEALTH
+# ============================================================
+
+### System Health Check
+GET {{baseUrl}}/health
+Content-Type: {{contentType}}
+
+###
+
+# ============================================================
+# GUARDIAN
+# ============================================================
+
+### Guardian Status
+GET {{baseUrl}}/api/guardian/status
+Content-Type: {{contentType}}
+
+###
+
+### Guardian Lock (requires auth)
+POST {{baseUrl}}/api/guardian/lock
+Content-Type: {{contentType}}
+
+{
+  "reason": "Manual lock - operator initiated",
+  "correlation_id": "test-lock-001"
+}
+
+###
+
+### Guardian Unlock (requires reset code)
+POST {{baseUrl}}/api/guardian/unlock
+Content-Type: {{contentType}}
+
+{
+  "reset_code": "{{$dotenv GUARDIAN_RESET_CODE}}",
+  "reason": "Manual unlock - operator verified",
+  "correlation_id": "test-unlock-001"
+}
+
+###
+
+# ============================================================
+# HITL APPROVALS
+# ============================================================
+
+### List Pending HITL Approvals
+GET {{baseUrl}}/api/hitl/pending
+Content-Type: {{contentType}}
+
+###
+
+### Approve a Trade (replace trade_id)
+POST {{baseUrl}}/api/hitl/approve
+Content-Type: {{contentType}}
+
+{
+  "trade_id": "REPLACE_WITH_TRADE_ID",
+  "decision": "APPROVE",
+  "reason": "Operator reviewed signal and risk parameters",
+  "correlation_id": "test-approve-001"
+}
+
+###
+
+### Reject a Trade (replace trade_id)
+POST {{baseUrl}}/api/hitl/reject
+Content-Type: {{contentType}}
+
+{
+  "trade_id": "REPLACE_WITH_TRADE_ID",
+  "decision": "REJECT",
+  "reason": "Operator rejected - market conditions unfavourable",
+  "correlation_id": "test-reject-001"
+}
+
+###
+
+# ============================================================
+# WEBHOOK (TradingView Signal Ingestion)
+# ============================================================
+
+### Simulate TradingView BUY Signal (DRY RUN)
+POST {{baseUrl}}/api/webhook/signal
+Content-Type: {{contentType}}
+X-Signature: {{$dotenv WEBHOOK_SECRET}}
+
+{
+  "symbol": "BTCZAR",
+  "action": "BUY",
+  "price": "1250000.00",
+  "confidence": 75,
+  "strategy": "EMA_CROSS",
+  "correlation_id": "test-signal-buy-001"
+}
+
+###
+
+### Simulate TradingView SELL Signal (DRY RUN)
+POST {{baseUrl}}/api/webhook/signal
+Content-Type: {{contentType}}
+X-Signature: {{$dotenv WEBHOOK_SECRET}}
+
+{
+  "symbol": "BTCZAR",
+  "action": "SELL",
+  "price": "1260000.00",
+  "confidence": 68,
+  "strategy": "EMA_CROSS",
+  "correlation_id": "test-signal-sell-001"
+}
+
+###
+
+# ============================================================
+# METRICS
+# ============================================================
+
+### Prometheus Metrics Scrape
+GET {{baseUrl}}/metrics
+Accept: text/plain
+
+###
