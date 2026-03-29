@@ -21,19 +21,19 @@ scrape_configs:
   # ==========================================================================
   # TRADE BOT METRICS
   # ==========================================================================
-  - job_name: 'autonomous_alpha'
+  - job_name: "autonomous_alpha"
     static_configs:
-      - targets: ['bot:8080']
-    metrics_path: '/metrics'
+      - targets: ["app:8080"]
+    metrics_path: "/metrics"
     scrape_interval: 15s
     scrape_timeout: 10s
 
   # ==========================================================================
   # PROMETHEUS SELF-MONITORING
   # ==========================================================================
-  - job_name: 'prometheus'
+  - job_name: "prometheus"
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ["localhost:9090"]
 
 # ============================================================================
 # 95% CONFIDENCE AUDIT
