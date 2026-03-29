@@ -46,8 +46,10 @@ import signal
 import asyncio
 import logging
 import uuid
+import atexit
 from decimal import Decimal, ROUND_HALF_EVEN
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, Dict, Any
 
 from dotenv import load_dotenv
@@ -76,6 +78,43 @@ SAFE_IDLE_RETRY_SECONDS = 300
 
 # Version
 VERSION = "1.8.0"
+
+# PID file path — signals the kill switch where this process lives
+PID_FILE = Path(os.environ.get("BOT_PID_FILE", "/app/data/bot.pid"))
+
+
+# =============================================================================
+# PID File Management
+# =============================================================================
+
+def _write_pid_file() -> None:
+    """
+    Write the current process PID to the configured PID file.
+
+    Reliability Level: SOVEREIGN TIER
+    Side Effects: Creates/overwrites PID file on disk
+    """
+    try:
+        PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PID_FILE.write_text(str(os.getpid()))
+        logger.info(f"PID file written | pid={os.getpid()} | path={PID_FILE}")
+    except OSError as exc:
+        logger.warning(f"Could not write PID file | path={PID_FILE} | error={exc}")
+
+
+def _remove_pid_file() -> None:
+    """
+    Remove the PID file on clean shutdown.
+
+    Reliability Level: SOVEREIGN TIER
+    Side Effects: Deletes PID file from disk
+    """
+    try:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+            logger.info(f"PID file removed | path={PID_FILE}")
+    except OSError as exc:
+        logger.warning(f"Could not remove PID file | path={PID_FILE} | error={exc}")
 
 
 # =============================================================================
@@ -503,6 +542,10 @@ def main():
     print()
     
     logger.info(f"Sovereign Orchestrator starting | correlation_id={correlation_id}")
+    
+    # Register PID file so the kill switch can signal this process
+    _write_pid_file()
+    atexit.register(_remove_pid_file)
     
     # Initialize services
     services = initialize_services(correlation_id)

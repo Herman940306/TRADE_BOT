@@ -6,28 +6,37 @@ Emergency Kill Switch - Instant Trading Halt
 
 Reliability Level: SOVEREIGN TIER (Mission-Critical)
 Input Constraints: Database connection required
-Side Effects: Updates system_settings.system_active flag
+Side Effects: Updates system_settings.system_active flag; optionally sends
+              SIGTERM to all running bot processes via PID files.
 
 PURPOSE
 -------
 Emergency control to instantly halt all trading operations.
 When activated, the Dispatcher will refuse to execute any trades.
+With --stop-processes, the script also sends SIGTERM to every process
+whose PID is recorded in the configured PID file, forcing a clean shutdown
+of ALL bot processes immediately.
 
 USAGE
 -----
     # Activate Kill Switch (HALT all trading)
     python scripts/kill_switch.py --activate --reason "Market volatility"
-    
+
+    # Activate AND immediately stop all running bot processes
+    python scripts/kill_switch.py --activate --reason "Emergency" --stop-processes
+
     # Deactivate Kill Switch (RESUME trading)
     python scripts/kill_switch.py --deactivate
-    
+
     # Check current status
     python scripts/kill_switch.py --status
 
 ============================================================================
 """
 
+import os
 import sys
+import signal
 import argparse
 from pathlib import Path
 from datetime import datetime, timezone
@@ -181,6 +190,52 @@ def deactivate_kill_switch(triggered_by: str = "kill_switch.py") -> bool:
         db.close()
 
 
+# Default PID file location — must match BOT_PID_FILE env var used by main.py
+_DEFAULT_PID_FILE = Path(os.environ.get("BOT_PID_FILE", "/app/data/bot.pid"))
+
+
+def stop_processes(pid_file: Path = _DEFAULT_PID_FILE) -> bool:
+    """
+    Send SIGTERM to all bot processes recorded in the PID file.
+
+    Reliability Level: SOVEREIGN TIER
+    Input Constraints: PID file must exist and contain a valid integer PID
+    Side Effects: Sends SIGTERM to the recorded process; removes stale PID file
+                  if the process no longer exists.
+
+    Args:
+        pid_file: Path to the file containing the bot process PID.
+
+    Returns:
+        True if at least one process was signalled, False otherwise.
+    """
+    if not pid_file.exists():
+        print(f"   ⚠️  PID file not found: {pid_file}")
+        print("   (Bot may not be running or was started without PID tracking)")
+        return False
+
+    try:
+        pid = int(pid_file.read_text().strip())
+    except (ValueError, OSError) as exc:
+        print(f"   ❌ Could not read PID file {pid_file}: {exc}")
+        return False
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        print(f"   ✅ SIGTERM sent to process {pid}")
+        return True
+    except ProcessLookupError:
+        print(f"   ⚠️  Process {pid} is not running — removing stale PID file")
+        try:
+            pid_file.unlink()
+        except OSError:
+            pass
+        return False
+    except PermissionError:
+        print(f"   ❌ Permission denied — cannot signal process {pid}")
+        return False
+
+
 def print_status(status: dict) -> None:
     """Print formatted status."""
     print("=" * 60)
@@ -243,6 +298,22 @@ def main():
         default="Manual activation via kill_switch.py",
         help="Reason for activating kill switch"
     )
+    parser.add_argument(
+        "--stop-processes",
+        action="store_true",
+        dest="stop_processes",
+        help=(
+            "After activating the kill switch, send SIGTERM to all running "
+            "bot processes recorded in the PID file (stops ALL processes immediately)"
+        ),
+    )
+    parser.add_argument(
+        "--pid-file",
+        type=Path,
+        dest="pid_file",
+        default=_DEFAULT_PID_FILE,
+        help=f"Path to the bot PID file (default: {_DEFAULT_PID_FILE})",
+    )
     
     args = parser.parse_args()
     
@@ -255,6 +326,8 @@ def main():
         print("🛑 ACTIVATING EMERGENCY KILL SWITCH")
         print("=" * 60)
         print(f"\n   Reason: {args.reason}")
+        if args.stop_processes:
+            print("   ⚡ --stop-processes: SIGTERM will be sent to ALL bot processes")
         
         confirm = input("\n   Type 'CONFIRM' to activate: ")
         
@@ -265,6 +338,11 @@ def main():
         if activate_kill_switch(args.reason):
             print("\n   ✅ KILL SWITCH ACTIVATED")
             print("   All trading has been HALTED")
+
+            if args.stop_processes:
+                print("\n   Stopping ALL running bot processes...")
+                stop_processes(args.pid_file)
+
             print("=" * 60)
         else:
             print("\n   ❌ Failed to activate kill switch")
