@@ -1,0 +1,11 @@
+{
+  "sonarlint.pathToNodeExecutable": "",
+  "sonarlint.connectedMode.project": {},
+  "sonarlint.testFilePattern": "**/tests/**,**/test_*.py,**/*_test.py",
+  "sonarlint.analysisExcludesStandalone": [
+    "**/__pycache__/**",
+    "**/.venv/**",
+    "**/migrations/**",
+    "**/*.pyc"
+  ]
+}

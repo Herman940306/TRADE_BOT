@@ -34,21 +34,20 @@ TOOLS EXPOSED
 """
 
 import asyncio
+import logging
 import os
 import sys
-import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 import httpx
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
-
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 # Load environment variables
 load_dotenv()
@@ -58,7 +57,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    stream=sys.stderr
+    stream=sys.stderr,
 )
 logger = logging.getLogger(__name__)
 
@@ -69,7 +68,7 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv(
     "AURA_DATABASE_URL",
-    "postgresql://aura_readonly:${AURA_DB_PASSWORD}@db:5432/autonomous_alpha"
+    "postgresql://aura_readonly:${AURA_DB_PASSWORD}@db:5432/autonomous_alpha",
 )
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 
@@ -85,7 +84,7 @@ SessionLocal = sessionmaker(bind=engine)
 def get_db_session():
     """
     Create a database session.
-    
+
     Reliability Level: SOVEREIGN TIER
     Input Constraints: None
     Side Effects: Creates database connection
@@ -97,10 +96,11 @@ def get_db_session():
 # PROMETHEUS CLIENT
 # ============================================================================
 
+
 async def query_prometheus(query: str) -> Optional[float]:
     """
     Query Prometheus for a metric value.
-    
+
     Reliability Level: SOVEREIGN TIER
     Input Constraints: Valid PromQL query string
     Side Effects: HTTP request to Prometheus
@@ -108,8 +108,7 @@ async def query_prometheus(query: str) -> Optional[float]:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
-                f"{PROMETHEUS_URL}/api/v1/query",
-                params={"query": query}
+                f"{PROMETHEUS_URL}/api/v1/query", params={"query": query}
             )
             if response.status_code != 200:
                 return None
@@ -130,10 +129,11 @@ async def query_prometheus(query: str) -> Optional[float]:
 # TOOL IMPLEMENTATIONS
 # ============================================================================
 
+
 async def explain_last_trade() -> str:
     """
     Generate a human-readable explanation of the last trade.
-    
+
     Reliability Level: SOVEREIGN TIER
     Input Constraints: None
     Side Effects: Database read query
@@ -141,7 +141,7 @@ async def explain_last_trade() -> str:
     try:
         session = get_db_session()
         query = text("""
-            SELECT 
+            SELECT
                 id, correlation_id, pair as symbol, side,
                 requested_price, avg_fill_price, quantity, filled_qty,
                 slippage_pct, status, created_at
@@ -153,7 +153,9 @@ async def explain_last_trade() -> str:
         session.close()
 
         if not result:
-            return "📭 No trades found in the system yet. The bot is waiting for signals."
+            return (
+                "📭 No trades found in the system yet. The bot is waiting for signals."
+            )
 
         trade_id = result[0]
         correlation_id = result[1]
@@ -168,7 +170,7 @@ async def explain_last_trade() -> str:
         created_at = result[10]
 
         fill_pct = (filled_qty / quantity * 100) if quantity > 0 else Decimal("0")
-        
+
         if avg_fill_price > requested_price:
             slippage_direction = "worse" if side == "BUY" else "better"
         elif avg_fill_price < requested_price:
@@ -189,7 +191,7 @@ async def explain_last_trade() -> str:
 📊 **Last Trade Summary** (Trade #{trade_id})
 
 **Signal:** {side} {symbol}
-**Time:** {time_str} ({created_at.strftime('%Y-%m-%d %H:%M UTC')})
+**Time:** {time_str} ({created_at.strftime("%Y-%m-%d %H:%M UTC")})
 **Status:** {status}
 
 **Execution Analysis:**
@@ -208,7 +210,9 @@ async def explain_last_trade() -> str:
         elif status == "FILLED" and slippage_pct < Decimal("0.005"):
             summary += "\n✅ **Verdict:** Good execution within acceptable slippage."
         elif status == "FILLED":
-            summary += "\n⚠️ **Verdict:** Trade filled but slippage was higher than ideal."
+            summary += (
+                "\n⚠️ **Verdict:** Trade filled but slippage was higher than ideal."
+            )
         elif status == "PARTIAL_FILL":
             summary += "\n⚠️ **Verdict:** Partial fill - market liquidity may have been limited."
         elif status == "REJECTED":
@@ -226,16 +230,16 @@ async def explain_last_trade() -> str:
 async def get_bot_vitals() -> str:
     """
     Get current bot health and vital statistics.
-    
+
     Reliability Level: SOVEREIGN TIER
     Input Constraints: None
     Side Effects: Database read + Prometheus query
     """
     try:
         session = get_db_session()
-        
+
         settings_query = text("""
-            SELECT 
+            SELECT
                 is_trading_enabled,
                 global_kill_switch,
                 circuit_breaker_active,
@@ -247,7 +251,7 @@ async def get_bot_vitals() -> str:
         settings = session.execute(settings_query).fetchone()
 
         stats_query = text("""
-            SELECT 
+            SELECT
                 COUNT(*) as total_trades,
                 COUNT(*) FILTER (WHERE status = 'FILLED') as filled_trades,
                 COUNT(*) FILTER (WHERE status = 'REJECTED') as rejected_trades
@@ -268,7 +272,7 @@ async def get_bot_vitals() -> str:
             cb_active = settings[2]
             cb_reason = settings[3]
             cb_expires = settings[4]
-            
+
             if kill_switch:
                 summary += "🚨 **GLOBAL KILL SWITCH: ACTIVE**\n"
                 summary += "All trading operations are HALTED.\n\n"
@@ -278,7 +282,9 @@ async def get_bot_vitals() -> str:
                 summary += "🔒 **Circuit Breaker:** ENGAGED\n"
                 summary += f"   Reason: {cb_reason}\n"
                 if cb_expires:
-                    summary += f"   Expires: {cb_expires.strftime('%Y-%m-%d %H:%M UTC')}\n"
+                    summary += (
+                        f"   Expires: {cb_expires.strftime('%Y-%m-%d %H:%M UTC')}\n"
+                    )
                 summary += "\n"
             else:
                 summary += "✅ **Trading Status:** ACTIVE & HEALTHY\n\n"
@@ -290,7 +296,7 @@ async def get_bot_vitals() -> str:
             filled = stats[1] or 0
             rejected = stats[2] or 0
             success_rate = (filled / total * 100) if total > 0 else 0
-            
+
             summary += "**24-Hour Statistics:**\n"
             summary += f"   Total Signals: {total}\n"
             summary += f"   Executed: {filled}\n"
@@ -302,7 +308,9 @@ async def get_bot_vitals() -> str:
             if expectancy > 0:
                 summary += f"   📈 Expectancy: {expectancy:.3f} (Positive - Good)\n"
             elif expectancy < 0:
-                summary += f"   📉 Expectancy: {expectancy:.3f} (Negative - Review needed)\n"
+                summary += (
+                    f"   📉 Expectancy: {expectancy:.3f} (Negative - Review needed)\n"
+                )
             else:
                 summary += f"   ➖ Expectancy: {expectancy:.3f} (Neutral)\n"
         else:
@@ -340,6 +348,291 @@ async def get_bot_vitals() -> str:
 mcp_server = Server("aura-bridge")
 
 
+# ============================================================================
+# NEW TOOL IMPLEMENTATIONS (Phase 9 — P9.5)
+# ============================================================================
+
+
+async def get_last_decision() -> str:
+    """
+    Get the last trade decision with verdict, mode, confidence, and reason code.
+
+    Reliability Level: SOVEREIGN TIER
+    Input Constraints: None
+    Side Effects: Database read query (read-only)
+    """
+    try:
+        session = get_db_session()
+        query = text("""
+            SELECT
+                ad.id,
+                ad.correlation_id,
+                ad.verdict,
+                ad.confidence_score,
+                ad.reasoning,
+                ad.created_at,
+                to2.pair as symbol,
+                to2.side
+            FROM ai_debates ad
+            LEFT JOIN trading_orders to2
+                ON ad.correlation_id = to2.correlation_id
+            ORDER BY ad.created_at DESC
+            LIMIT 1
+        """)
+        result = session.execute(query).fetchone()
+        session.close()
+
+        if not result:
+            return "📭 No AI decisions recorded yet. The system is idle."
+
+        debate_id = result[0]
+        correlation_id = result[1]
+        verdict = result[2]
+        confidence = result[3]
+        reasoning = result[4]
+        created_at = result[5]
+        symbol = result[6] or "UNKNOWN"
+        side = result[7] or "N/A"
+
+        time_ago = datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc)
+        hours_ago = time_ago.total_seconds() / 3600
+        if hours_ago < 1:
+            time_str = f"{int(time_ago.total_seconds() / 60)} minutes ago"
+        elif hours_ago < 24:
+            time_str = f"{int(hours_ago)} hours ago"
+        else:
+            time_str = f"{int(hours_ago / 24)} days ago"
+
+        verdict_icon = "✅" if verdict and str(verdict).upper() == "APPROVED" else "🛑"
+
+        summary = f"""
+🧠 **Last AI Decision** (Debate #{debate_id})
+
+**Signal:** {side} {symbol}
+**Time:** {time_str} ({created_at.strftime("%Y-%m-%d %H:%M UTC")})
+**Verdict:** {verdict_icon} {verdict}
+**Confidence:** {confidence}
+
+**Reasoning:**
+{reasoning or "No reasoning recorded"}
+
+**Correlation ID:** {correlation_id}
+"""
+        return summary.strip()
+
+    except Exception as e:
+        logger.error(f"get_last_decision error: {e}")
+        return f"❌ Error retrieving last decision: {str(e)}"
+
+
+async def get_reasoning_packet() -> str:
+    """
+    Get the last reasoning output with facts, contradictions, and escalation info.
+
+    Reliability Level: SOVEREIGN TIER
+    Input Constraints: None
+    Side Effects: Database read query (read-only)
+    """
+    try:
+        session = get_db_session()
+
+        # Get last 3 debates for context
+        query = text("""
+            SELECT
+                ad.id,
+                ad.correlation_id,
+                ad.verdict,
+                ad.confidence_score,
+                ad.reasoning,
+                ad.created_at
+            FROM ai_debates ad
+            ORDER BY ad.created_at DESC
+            LIMIT 3
+        """)
+        results = session.execute(query).fetchall()
+
+        # Get escalation stats
+        stats_query = text("""
+            SELECT
+                COUNT(*) as total_debates,
+                COUNT(*) FILTER (WHERE verdict = 'APPROVED') as approved,
+                COUNT(*) FILTER (WHERE verdict = 'REJECTED') as rejected
+            FROM ai_debates
+            WHERE created_at > NOW() - INTERVAL '24 hours'
+        """)
+        stats = session.execute(stats_query).fetchone()
+        session.close()
+
+        if not results:
+            return "📭 No reasoning packets recorded yet."
+
+        summary = "🔬 **Reasoning Packet Summary**\n\n"
+
+        if stats:
+            total = stats[0] or 0
+            approved = stats[1] or 0
+            rejected = stats[2] or 0
+            approval_rate = (approved / total * 100) if total > 0 else 0
+
+            summary += "**24-Hour Statistics:**\n"
+            summary += f"   Total Debates: {total}\n"
+            summary += f"   Approved: {approved}\n"
+            summary += f"   Rejected: {rejected}\n"
+            summary += f"   Approval Rate: {approval_rate:.1f}%\n\n"
+
+        summary += "**Recent Decisions (Last 3):**\n\n"
+
+        for row in results:
+            debate_id = row[0]
+            verdict = row[2]
+            confidence = row[3]
+            reasoning = row[4]
+            created_at = row[5]
+
+            verdict_icon = (
+                "✅" if verdict and str(verdict).upper() == "APPROVED" else "🛑"
+            )
+            time_str = created_at.strftime("%H:%M UTC") if created_at else "N/A"
+
+            summary += "---\n"
+            summary += f"**Debate #{debate_id}** ({time_str})\n"
+            summary += (
+                f"   Verdict: {verdict_icon} {verdict} | Confidence: {confidence}\n"
+            )
+            if reasoning:
+                # Truncate long reasoning
+                truncated = (
+                    reasoning[:200] + "..." if len(str(reasoning)) > 200 else reasoning
+                )
+                summary += f"   Reasoning: {truncated}\n"
+            summary += "\n"
+
+        return summary.strip()
+
+    except Exception as e:
+        logger.error(f"get_reasoning_packet error: {e}")
+        return f"❌ Error retrieving reasoning packet: {str(e)}"
+
+
+async def get_system_metrics() -> str:
+    """
+    Get system health metrics including debate counts, mode distribution.
+
+    Reliability Level: SOVEREIGN TIER
+    Input Constraints: None
+    Side Effects: Database read + Prometheus query (read-only)
+    """
+    try:
+        session = get_db_session()
+
+        # Overall debate stats
+        overall_query = text("""
+            SELECT
+                COUNT(*) as total_debates,
+                COUNT(*) FILTER (WHERE verdict = 'APPROVED') as approved,
+                COUNT(*) FILTER (WHERE verdict = 'REJECTED') as rejected,
+                AVG(confidence_score) as avg_confidence,
+                MIN(created_at) as first_debate,
+                MAX(created_at) as last_debate
+            FROM ai_debates
+        """)
+        overall = session.execute(overall_query).fetchone()
+
+        # Recent activity (last 24h)
+        recent_query = text("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE verdict = 'APPROVED') as approved,
+                COUNT(*) FILTER (WHERE verdict = 'REJECTED') as rejected
+            FROM ai_debates
+            WHERE created_at > NOW() - INTERVAL '24 hours'
+        """)
+        recent = session.execute(recent_query).fetchone()
+
+        # Trade stats
+        trade_query = text("""
+            SELECT
+                COUNT(*) as total_orders,
+                COUNT(*) FILTER (WHERE status = 'FILLED') as filled,
+                COUNT(*) FILTER (WHERE status = 'REJECTED') as rejected
+            FROM trading_orders
+        """)
+        trades = session.execute(trade_query).fetchone()
+
+        # Circuit breaker events
+        cb_query = text("""
+            SELECT COUNT(*)
+            FROM circuit_breaker_events
+            WHERE created_at > NOW() - INTERVAL '7 days'
+        """)
+        cb_count = session.execute(cb_query).scalar() or 0
+
+        session.close()
+
+        # Prometheus metrics
+        equity = await query_prometheus("equity_zar_gauge")
+        expectancy = await query_prometheus("expectancy_gauge")
+
+        summary = "📊 **System Metrics Dashboard**\n\n"
+
+        summary += "**AI Council — All Time:**\n"
+        if overall and overall[0]:
+            total = overall[0]
+            approved = overall[1] or 0
+            rejected = overall[2] or 0
+            avg_conf = overall[3]
+            first = overall[4]
+            last = overall[5]
+
+            approval_rate = (approved / total * 100) if total > 0 else 0
+            summary += f"   Total Debates: {total}\n"
+            summary += f"   Approved: {approved} ({approval_rate:.1f}%)\n"
+            summary += f"   Rejected: {rejected}\n"
+            if avg_conf is not None:
+                summary += f"   Avg Confidence: {avg_conf:.2f}\n"
+            if first:
+                summary += f"   First Debate: {first.strftime('%Y-%m-%d %H:%M UTC')}\n"
+            if last:
+                summary += f"   Last Debate: {last.strftime('%Y-%m-%d %H:%M UTC')}\n"
+        else:
+            summary += "   No debates recorded yet.\n"
+
+        summary += "\n**24-Hour Activity:**\n"
+        if recent and recent[0] > 0:
+            summary += f"   Debates: {recent[0]}\n"
+            summary += f"   Approved: {recent[1] or 0}\n"
+            summary += f"   Rejected: {recent[2] or 0}\n"
+        else:
+            summary += "   No activity in the last 24 hours.\n"
+
+        summary += "\n**Trading Orders:**\n"
+        if trades:
+            summary += f"   Total Orders: {trades[0] or 0}\n"
+            summary += f"   Filled: {trades[1] or 0}\n"
+            summary += f"   Rejected: {trades[2] or 0}\n"
+        else:
+            summary += "   No orders recorded.\n"
+
+        summary += f"\n**Circuit Breaker Events (7d):** {cb_count}\n"
+
+        summary += "\n**Performance:**\n"
+        if equity is not None:
+            summary += f"   💰 Equity: R {equity:,.2f}\n"
+        else:
+            summary += "   Equity: No data\n"
+        if expectancy is not None:
+            icon = "📈" if expectancy > 0 else "📉" if expectancy < 0 else "➖"
+            summary += f"   {icon} Expectancy: {expectancy:.3f}\n"
+        else:
+            summary += "   Expectancy: No data\n"
+
+        return summary.strip()
+
+    except Exception as e:
+        logger.error(f"get_system_metrics error: {e}")
+        return f"❌ Error retrieving system metrics: {str(e)}"
+
+
 @mcp_server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available MCP tools."""
@@ -352,11 +645,7 @@ async def list_tools() -> list[Tool]:
                 "fill price, analyzes slippage, and provides a verdict on "
                 "execution quality."
             ),
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
+            inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
             name="get_bot_vitals",
@@ -366,12 +655,35 @@ async def list_tools() -> list[Tool]:
                 "enabled/disabled state, 24-hour trade statistics, and the "
                 "current expectancy ratio from Prometheus metrics."
             ),
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        )
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        Tool(
+            name="get_last_decision",
+            description=(
+                "Get the last AI trade decision including verdict (APPROVED/REJECTED), "
+                "reasoning mode (FAST/DEEP), confidence score, reason code, and "
+                "the reasoning text. Read-only."
+            ),
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        Tool(
+            name="get_reasoning_packet",
+            description=(
+                "Get the last reasoning output including recent debate history, "
+                "approval rates, and individual debate reasoning. Shows the last "
+                "3 decisions with verdicts and confidence scores. Read-only."
+            ),
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        Tool(
+            name="get_system_metrics",
+            description=(
+                "Get comprehensive system metrics dashboard including all-time "
+                "debate statistics, 24-hour activity, trading order counts, "
+                "circuit breaker events, equity, and expectancy. Read-only."
+            ),
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
     ]
 
 
@@ -379,14 +691,20 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Execute an MCP tool."""
     logger.info(f"Tool called: {name}")
-    
+
     if name == "explain_last_trade":
         result = await explain_last_trade()
     elif name == "get_bot_vitals":
         result = await get_bot_vitals()
+    elif name == "get_last_decision":
+        result = await get_last_decision()
+    elif name == "get_reasoning_packet":
+        result = await get_reasoning_packet()
+    elif name == "get_system_metrics":
+        result = await get_system_metrics()
     else:
         result = f"❌ Unknown tool: {name}"
-    
+
     return [TextContent(type="text", text=result)]
 
 
@@ -394,24 +712,25 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 # MAIN - STDIO TRANSPORT
 # ============================================================================
 
+
 async def main():
     """
     Main entry point for Stdio transport.
-    
+
     Reliability Level: SOVEREIGN TIER
     Input Constraints: Stdio streams
     Side Effects: Runs MCP server over stdin/stdout
     """
     logger.info("Starting Aura MCP Bridge (Stdio Transport)")
-    logger.info(f"Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else 'configured'}")
+    logger.info(
+        f"Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else 'configured'}"
+    )
     logger.info(f"Prometheus: {PROMETHEUS_URL}")
-    
+
     async with stdio_server() as (read_stream, write_stream):
         logger.info("Stdio streams established, running MCP server")
         await mcp_server.run(
-            read_stream,
-            write_stream,
-            mcp_server.create_initialization_options()
+            read_stream, write_stream, mcp_server.create_initialization_options()
         )
 
 

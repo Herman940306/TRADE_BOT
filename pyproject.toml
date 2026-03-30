@@ -1,0 +1,62 @@
+# ============================================================================
+# Project Autonomous Alpha — Python Tooling Configuration
+# ============================================================================
+# Reliability Level: SOVEREIGN TIER
+# Purpose: Configure linters and type checkers for this codebase.
+# ============================================================================
+
+[project]
+name = "autonomous-alpha"
+version = "1.9.0"
+requires-python = ">=3.11"
+
+# ============================================================================
+# Ruff (linter + formatter)
+# ============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",   # line-too-long — handled by line-length setting above
+]
+
+# ============================================================================
+# Flake8 compatibility (if used via flake8 extension)
+# ============================================================================
+[tool.flake8]
+max-line-length = 100
+
+# ============================================================================
+# Pyright / Pylance
+# ============================================================================
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "off"
+reportGeneralTypeIssues = false
+
+# ============================================================================
+# Pylint
+# ============================================================================
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint."messages control"]
+disable = [
+    "C0301",  # line-too-long (handled by max-line-length)
+    "W0703",  # broad-except (intentional fail-safe patterns)
+    "C0114",  # missing-module-docstring
+    "C0115",  # missing-class-docstring
+    "C0116",  # missing-function-docstring
+]
+
+# ============================================================================
+# Pytest
+# ============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

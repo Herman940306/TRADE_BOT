@@ -31,8 +31,6 @@
 #
 # ============================================================================
 
-version: '3.8'
-
 services:
   # ==========================================================================
   # DATABASE SERVICE - PostgreSQL 15
@@ -256,7 +254,7 @@ services:
   # ==========================================================================
   # Dashboards for trading metrics visualization
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.6.0
     container_name: autonomous_alpha_grafana
     restart: unless-stopped
     ports:
@@ -301,7 +299,7 @@ services:
   # Free temporary tunnel for TradingView webhooks (URL changes on restart)
   # Extract URL: sudo docker-compose -f docker-compose.prod.yml logs cloudflare-tunnel | grep trycloudflare.com
   cloudflare-tunnel:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2025.4.2
     container_name: autonomous_alpha_tunnel
     restart: unless-stopped
     command: tunnel --no-autoupdate --url http://bot:8080
@@ -365,10 +363,9 @@ services:
   # NVIDIA GPU REQUIRED - RTX 2080 (8GB VRAM)
   # VRAM Management: Max 2 models, keep deepseek-r1 always loaded
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.6.7
     container_name: autonomous_alpha_ollama
     restart: unless-stopped
-    runtime: nvidia
     ports:
       - "11435:11434"
     environment:

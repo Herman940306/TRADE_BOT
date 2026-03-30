@@ -1,0 +1,4 @@
+strategy_name,total_signals,total_trades,winning_trades,losing_trades,win_rate,total_pnl_zar,cumulative_return_pct,max_drawdown_pct,profit_factor,expectancy_zar,avg_win_zar,avg_loss_zar,signals_approved,signals_rejected_quality,signals_rejected_confidence,signals_rejected_risk,approval_rate_pct
+ALPHA_SYSTEM,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+RANDOM_DIRECTION,0,29,15,14,51.72,-3610.45,-3.61,5.31,0.67,-124.50,492.75,-785.83,0,0,0,0,0
+EMA_CROSSOVER,0,3,1,2,33.33,-439.73,-0.44,0.47,0.06,-146.58,28.54,-234.14,0,0,0,0,0

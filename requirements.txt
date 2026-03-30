@@ -47,6 +47,13 @@ websockets==12.0
 prometheus_client==0.19.0
 
 # ============================================================================
+# Optional Dependencies (Non-Critical Path)
+# ============================================================================
+
+# Analytics (Phase 9 - OHLCV batch analytics, not in trading hot path)
+# polars>=1.0.0  # Uncomment when Python 3.14 wheels available
+
+# ============================================================================
 # Development Dependencies (Optional)
 # ============================================================================
 
