@@ -152,9 +152,36 @@ OPENROUTER_DEFAULT = ProviderProfile(
     section_budgets=_OPENROUTER_SECTIONS,
 )
 
+# --- qwen3:8b DEEP mode profile (Phase 8) ---
+# Expanded budget for contradiction-aware analysis.
+# Same model, larger budget for deliberate reasoning.
+
+_QWEN3_DEEP_SECTIONS = {
+    "SYS": SectionBudget(code="SYS", name="System Prompt", max_tokens=250),
+    "HDR": SectionBudget(code="HDR", name="Packet Header", max_tokens=60),
+    "SIG": SectionBudget(code="SIG", name="Signal Fields", max_tokens=80),
+    "OPS": SectionBudget(code="OPS", name="Operational Context", max_tokens=80),
+    "HST": SectionBudget(code="HST", name="History Summary", max_tokens=100),
+    "INT": SectionBudget(code="INT", name="Intelligence Layer", max_tokens=150),
+    "MDF": SectionBudget(code="MDF", name="Missing Data Flags", max_tokens=80),
+    "VRD": SectionBudget(code="VRD", name="Verdict Instruction", max_tokens=150),
+}
+
+QWEN3_8B_DEEP = ProviderProfile(
+    provider_type=ProviderType.LOCAL_OLLAMA,
+    model_name="qwen3:8b-deep",
+    model_context_window=32768,
+    safe_operating_budget=2600,
+    input_budget=1800,
+    output_reserve=640,
+    safety_margin=160,
+    section_budgets=_QWEN3_DEEP_SECTIONS,
+)
+
 # Registry of known profiles
 PROVIDER_PROFILES: Dict[str, ProviderProfile] = {
     "qwen3:8b": QWEN3_8B_LOCAL,
+    "qwen3:8b-deep": QWEN3_8B_DEEP,
     "openrouter/default": OPENROUTER_DEFAULT,
 }
 

@@ -1,0 +1,64 @@
+# ==========================================================================
+# Project Autonomous Alpha — .dockerignore
+# Exclude non-production files from Docker build context
+# ==========================================================================
+
+# Version control
+.git
+.gitignore
+
+# Virtual environments
+.venv*
+__pycache__
+*.pyc
+*.pyo
+
+# IDE / Editor
+.vscode
+.kiro
+.idea
+*.swp
+*.swo
+
+# Test artifacts
+tests/
+test_results/
+pytest_output.txt
+test_results.txt
+Dockerfile.test
+docker-compose.test.yml
+
+# Documentation (not needed at runtime)
+DOCS/
+*.md
+!requirements.txt
+
+# Logs and runtime data (mounted as volumes)
+logs/
+data/
+
+# Scripts not needed in production image
+scripts/check_*.py
+scripts/test_*.py
+scripts/demo_*.py
+scripts/security_proof*.py
+scripts/phase11_*.py
+
+# Grafana / Prometheus configs (separate containers)
+grafana/
+prometheus/
+
+# Bridge services (built from their own context)
+bridge/
+aura_bridge/
+
+# Cloudflare tunnel
+cloudflared/
+
+# Development compose files
+docker-compose.local.yml
+docker-compose.test.yml
+
+# OS files
+Thumbs.db
+.DS_Store

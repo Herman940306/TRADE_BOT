@@ -1,4 +1,20 @@
 {
   "mcpServers": {
+    "aura-bridge": {
+      "command": "D:/dev/repos/TRADE_BOT/.venv-win/Scripts/python.exe",
+      "args": ["D:/dev/repos/TRADE_BOT/aura_bridge/mcp_stdio_server.py"],
+      "cwd": "D:/dev/repos/TRADE_BOT",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "aura-full": {
+      "command": "D:/dev/repos/TRADE_BOT/.venv-win/Scripts/python.exe",
+      "args": ["D:/dev/repos/TRADE_BOT/aura_bridge/chat_service_mcp.py"],
+      "cwd": "D:/dev/repos/TRADE_BOT",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
   }
 }

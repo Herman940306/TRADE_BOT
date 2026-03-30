@@ -204,3 +204,27 @@ webhook.py → AIBackendReliabilityManager.route_debate()
 ```
 
 The legacy `get_ai_council()` factory remains available for backward compatibility but is no longer called from the webhook hot path.
+
+---
+
+## 9. Phase 8 — Dual-Mode Reasoning
+
+Phase 8 introduces a dual-mode reasoning layer that operates ABOVE the provider routing:
+
+```
+webhook.py → DualModeReasoner.reason()
+                ├── FAST mode (default, /no_think, 2,048 budget)
+                ├── EscalationPolicy.evaluate() → deterministic trigger check
+                └── DEEP mode (escalated, thinking enabled, 2,600 budget)
+                    └── Both modes → Ollama (qwen3:8b) via same endpoint
+```
+
+**Key policy implications:**
+
+- **Single model only** — both FAST and DEEP use qwen3:8b. No second model loaded.
+- **Provider fallback triggers escalation** — if AIBackendReliabilityManager used a fallback provider, DEEP mode is triggered (ESC-T08).
+- **Degraded context triggers escalation** — if `degraded_context=True`, DEEP mode is triggered (ESC-T07).
+- **Token budgets differ by mode** — FAST: 2,048 tokens; DEEP: 2,600 tokens.
+- **Fail-closed preserved** — both modes default to REJECTED on any error.
+
+See: DUAL_MODE_REASONING_PLAN.md, FAST_DEEP_ESCALATION_POLICY.md
