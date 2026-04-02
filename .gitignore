@@ -97,8 +97,10 @@ data/budget_reports/
 # Extracted TradingView data
 data/tv_extracted/
 
-# Test results (may contain sensitive info)
+# Test results (may contain sensitive info or local paths)
 test_results/
+test_results.txt
+pytest_output.txt
 
 # Backups (may contain database dumps)
 backups/
@@ -149,6 +151,13 @@ temp/
 *.temp
 *.bak
 *.backup
+
+# ============================================================================
+# BINARIES AND TUNNELS
+# ============================================================================
+# Cloudflare tunnel binary (large executable, must not be tracked)
+cloudflared
+cloudflared.exe
 
 # ============================================================================
 # Sovereign Reliability Audit
